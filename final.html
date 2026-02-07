@@ -305,6 +305,28 @@
         drawDog(ldRx, lp.y - lsOff, lS, ph + PI * .5);
         drawDog(wdLx, wp.y + lsOff, wS, ph + PI);
         drawDog(wdRx, wp.y - lsOff, wS, ph + PI * 1.5);
+        // Dog foot snow puffs
+        if (state == 1 && speed > 5) {
+          let dogs = [
+            { x: ldLx, y: lp.y + lsOff, s: lS, p: ph },
+            { x: ldRx, y: lp.y - lsOff, s: lS, p: ph + PI * .5 },
+            { x: wdLx, y: wp.y + lsOff, s: wS, p: ph + PI },
+            { x: wdRx, y: wp.y - lsOff, s: wS, p: ph + PI * 1.5 }
+          ];
+          for (let d of dogs) {
+            // Spawn on leg strike (when sin crosses zero going down)
+            if (Math.sin(d.p) > 0.5 && Math.random() < 0.6) {
+              particles.push({
+                x: d.x + (Math.random() * 4 - 2) * d.s,
+                y: d.y + 2 * d.s,
+                vx: (Math.random() - 0.5) * 2,
+                vy: -Math.random() * 1.8 - 0.5,
+                life: 14 + Math.random() * 10 | 0, ml: 24,
+                sz: 2 + Math.random() * 2.5
+              });
+            }
+          }
+        }
         // Harness: lead dogs to wheel dogs
         g.strokeStyle = '#654'; g.lineWidth = 1;
         g.beginPath(); g.moveTo(ldLx, lp.y - 5 * lS); g.lineTo(wdLx, wp.y - 5 * wS); g.stroke();
@@ -369,13 +391,16 @@
     // Sled + rider (rear view)
     function drawSled(x, y, sc) {
       let lean = turnRate * 0.3;
-      g.save(); g.translate(x, y); g.scale(sc, sc); g.rotate(lean * 0.15 - lateralSlope * 0.8);
+      let slideX = lean * 6; // lateral slide when turning
+      g.save(); g.translate(x + slideX * sc, y); g.scale(sc, sc); g.rotate(lean * 0.4 - lateralSlope * 0.8);
       // Shadow
       g.fillStyle = 'rgba(0,0,0,0.15)';
       g.beginPath(); g.ellipse(0, 12, 10, 3, 0, 0, PI * 2); g.fill();
+      // Runner height offset — inner runner dips, outer lifts when turning
+      let rLift = lean * 3;
       // Runners (two vertical lines, splayed)
       g.fillStyle = '#654321';
-      g.fillRect(-8, 4, 2, 7); g.fillRect(6, 4, 2, 7);
+      g.fillRect(-8, 4 + rLift, 2, 7 - rLift); g.fillRect(6, 4 - rLift, 2, 7 + rLift);
       // Runner blades
       g.fillStyle = '#888';
       g.fillRect(-9, 10, 3, 1); g.fillRect(6, 10, 3, 1);
@@ -389,18 +414,19 @@
       g.fillStyle = '#654321';
       g.fillRect(-7, 1, 1, 4); g.fillRect(6, 1, 1, 4);
       g.fillRect(-7, 1, 14, 1);
-      // Rider torso (back view)
-      g.fillStyle = '#445'; g.fillRect(-4, -4, 8, 6);
+      // Rider torso (back view) — leans into turn
+      let riderLean = lean * 4;
+      g.fillStyle = '#445'; g.fillRect(-4 + riderLean, -4, 8, 6);
       // Shoulders
-      g.fillRect(-5, -3, 1, 2); g.fillRect(4, -3, 1, 2);
-      // Arms gripping handlebar
+      g.fillRect(-5 + riderLean, -3, 1, 2); g.fillRect(4 + riderLean, -3, 1, 2);
+      // Arms gripping handlebar — inner arm extends, outer arm tucks
       g.fillRect(-6, -1, 2, 3); g.fillRect(4, -1, 2, 3);
-      // Head (back of)
-      g.fillStyle = '#dba'; g.fillRect(-2, -7, 4, 3);
+      // Head (back of) — follows rider lean
+      g.fillStyle = '#dba'; g.fillRect(-2 + riderLean, -7, 4, 3);
       // Beanie
-      g.fillStyle = '#bb0000'; g.fillRect(-3, -9, 6, 2);
+      g.fillStyle = '#bb0000'; g.fillRect(-3 + riderLean, -9, 6, 2);
       // Pom pom
-      g.fillStyle = '#fff'; g.fillRect(-1, -10, 2, 1);
+      g.fillStyle = '#fff'; g.fillRect(-1 + riderLean, -10, 2, 1);
       // Scarf trailing
       g.fillStyle = '#c49102'; g.fillRect(-3, -4, 6, 1);
       g.restore();
