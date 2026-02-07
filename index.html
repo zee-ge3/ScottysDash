@@ -174,20 +174,22 @@ drawMtn(H*0.45,50,5.3,'#7080a0',-px*1.2+fz*1.5);
 // 3D column raycaster terrain
 renderTerrain();
 
-// Acceleration streaks (from player)
-if(accelVal>0.15&&state==1){
-let n=(accelVal*5)|0;
+if(speed>=13&&state==1){
+let spdF=10+(speed-13)*14/17;
+let n=spdF|0;
 for(let i=0;i<n;i++){
 let a=Math.random()*PI*2;
-let r1=20+Math.random()*30;
-let r2=r1+20+accelVal*80;
-g.strokeStyle=`rgba(255,255,255,${Math.min(0.5,accelVal*0.2)})`;
-g.lineWidth=1.5+accelVal*0.5;
+let r1=W*0.25+Math.random()*W*0.15;
+let r2=r1+40+(accelVal+spdF)*60;
+let dx=Math.cos(a),dy=Math.sin(a)*0.6;
+g.strokeStyle=`rgba(255,255,255,${Math.min(0.5,0.3+(spdF-10)*0.2/14)})`;
+g.lineWidth=0.8+Math.random()*1.5;
 g.beginPath();
-g.moveTo(pScrX+Math.cos(a)*r1,pScrY+Math.sin(a)*r1*0.5);
-g.lineTo(pScrX+Math.cos(a)*r2,pScrY+Math.sin(a)*r2*0.5);
+g.moveTo(pScrX+dx*r1,pScrY+dy*r1);
+g.lineTo(pScrX+dx*r2,pScrY+dy*r2);
 g.stroke();
 }}
+
 
 // === 5. RENDER BOBSLED TEAM ===
 let pp=project(pX,pY,pZ);
