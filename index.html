@@ -7,7 +7,7 @@ let W,H;
 function resize(){W=c.width=innerWidth;H=c.height=innerHeight}
 resize();onresize=resize;
 
-const DRAW=80,PI=Math.PI;
+const PI=Math.PI;
 let state=0,speed=0,turnRate=0;
 let score=0,combo=1,maxCombo=1,hiScore=+localStorage.getItem('hs')||0;
 let inputX=0,inputTuck=0,crashed=0,crashTimer=0;
@@ -17,10 +17,26 @@ let lastTime=0,audioCtx,sndCarve;
 let pX=0,pY=0,pZ=0;
 // Camera world position (smoothed, decoupled from player)
 let camX=0,camY=3,camZ=-5;
+let camAngle=0;
 // Player screen position (updated by render, used by particles)
-let pScrX=0,pScrY=0,slopeVal=0,prevSpd=5,accelVal=0,smoothFov=0.65;
+let pScrX=0,pScrY=0,slopeVal=0,prevSpd=7.5,accelVal=0,smoothFov=0.65;
 
 function lerp(a,b,t){return a+(b-a)*t}
+
+// Project world coords to screen via camera rotation + perspective divide
+function project(wx,wy,wz){
+let dx=wx-camX,dy=wy-camY,dz=wz-camZ;
+let cs=Math.cos(camAngle),sn=Math.sin(camAngle);
+let rz=dx*sn+dz*cs;
+let rx=dx*cs-dz*sn;
+if(rz<0.3)rz=0.3;
+let focal=H*smoothFov;
+let horizon=H*0.38;
+let sx=W/2+rx*focal/rz+shakeX;
+let sy=horizon-dy*focal/rz+shakeY;
+let sc=focal/rz;
+return {x:sx,y:sy,s:sc,z:rz};
+}
 
 function initAudio(){
 if(audioCtx)return;
@@ -50,13 +66,58 @@ return (Math.sin(z*0.018)*40+Math.sin(z*0.046)*20+Math.sin(z*0.102)*10
 function curvature(z){return Math.sin(z*0.013)*5+Math.sin(z*0.029)*3+Math.sin(z*0.067)*1.5}
 function terrainType(i){let v=Math.sin(i*0.037)*0.5+0.5;if(i>500)v+=0.15;if(i>1500)v+=0.15;return v<0.25?0:v<0.6?1:v<0.8?2:3}
 
-// Draw trapezoid
-function D(x1,y1,w1,x2,y2,w2,col){
-g.fillStyle=col;
-g.beginPath();
-g.moveTo(x1-w1,y1);g.lineTo(x1+w1,y1);
-g.lineTo(x2+w2,y2);g.lineTo(x2-w2,y2);
-g.fill();
+// Column raycaster terrain renderer
+function renderTerrain(){
+let horizon=H*0.38;
+let focal=H*smoothFov;
+let colStep=W>1200?4:3;
+let skyR=192,skyG2=221,skyB=240; // fog/sky color #c0ddf0
+
+for(let col=0;col<W;col+=colStep){
+let screenX=(col-W/2)/focal;
+let rayAng=camAngle+Math.atan(screenX);
+let rayDx=Math.sin(rayAng);
+let rayDz=Math.cos(rayAng);
+let maxY=H;
+let dist=1.0;
+let perpCos=Math.cos(Math.atan(screenX));
+
+for(let step=0;step<130;step++){
+let wx=camX+rayDx*dist;
+let wz=camZ+rayDz*dist;
+let h=getHeight(wx,wz);
+let perpDist=dist*perpCos;
+let screenY=horizon+(camY-h)*focal/perpDist+shakeY;
+
+if(screenY<maxY){
+// Snow color based on height relative to player
+let t=1-Math.max(0,Math.min(1,(h-pY+8)/16));
+let baseR=90+t*160;
+let baseG=95+t*155;
+let baseB=110+t*140;
+
+// Slope shading via height offset sampling
+let hFwd=getHeight(wx+rayDx*0.5,wz+rayDz*0.5);
+let slopeDh=hFwd-h;
+if(slopeDh>0.03){let sh=Math.min(0.45,slopeDh*0.8);baseR+=sh*90;baseG+=sh*85;baseB+=sh*50;}
+else if(slopeDh<-0.03){let sh=Math.min(0.45,-slopeDh*0.8);baseR-=sh*70;baseG-=sh*60;baseB+=sh*30;}
+
+// Distance fog blending
+let fogT=Math.min(1,dist*dist*0.0004);
+let r=baseR*(1-fogT)+skyR*fogT;
+let gv=baseG*(1-fogT)+skyG2*fogT;
+let b=baseB*(1-fogT)+skyB*fogT;
+
+g.fillStyle=`rgb(${r|0},${gv|0},${b|0})`;
+g.fillRect(col,screenY|0,colStep,maxY-screenY+1);
+maxY=screenY;
+}
+
+if(maxY<=0)break;
+dist+=0.3+dist*0.012;
+if(dist>50)break;
+}
+}
 }
 
 // Mountain range with optional snow caps
@@ -81,9 +142,6 @@ g.lineTo(W+20,by-sl);g.closePath();g.fill();
 
 // === 4. RENDERING: Project world from camera perspective ===
 function render(){
-let horizon=H*0.38;
-let focal=H*smoothFov;
-
 // Full-screen sky gradient
 let skyG=g.createLinearGradient(0,0,0,H);
 skyG.addColorStop(0,'#3a7fb7');
@@ -106,68 +164,22 @@ g.fillStyle='#fffde8';
 g.beginPath();g.arc(sunX,sunY,10,0,PI*2);g.fill();
 
 // Mountain ranges with parallax (far to near, each fills to screen bottom)
-let px=-camX,fz=camZ*0.05,tr=turnRate*W*0.012;
-drawMtn(H*0.22,100,0.5,'#b0c0d4',px*0.15+fz*0.1+tr*0.15);
-drawMtn(H*0.30,85,1.7,'#9aabbd',px*0.35+fz*0.2+tr*0.3,'#d0dce8');
-drawMtn(H*0.38,65,3.1,'#8494a8',px*0.7+fz*0.5+tr*0.6);
-drawMtn(H*0.45,50,5.3,'#7080a0',px*1.2+fz*0.8+tr);
+let px=-camAngle*W*0.6,fz=camZ*0.05;
+drawMtn(H*0.22,100,0.5,'#b0c0d4',px*0.15+fz*0.1);
+drawMtn(H*0.30,85,1.7,'#9aabbd',px*0.35+fz*0.2,'#d0dce8');
+drawMtn(H*0.38,65,3.1,'#8494a8',px*0.7+fz*0.5);
+drawMtn(H*0.45,50,5.3,'#7080a0',px*1.2+fz*0.8);
 
-let baseI=Math.floor(camZ);
-
-// Build terrain segments: project each strip from camera perspective
-let segs=[];
-let accCurve=0;
-let playerN=Math.round(pZ-camZ);
-let playerAccCurve=0;
-
-for(let n=0;n<=DRAW;n++){
-let si=baseI+n;
-let dz=si-camZ;
-if(dz<0.2)dz=0.2;
-
-// Accumulate visual curvature
-accCurve+=curvature(si)*0.008;
-if(n==playerN)playerAccCurve=accCurve;
-
-// Sample ground height at this strip's world Z
-let groundH=getHeight(camX,si);
-// Height relative to camera (negative = camera above ground)
-let relY=groundH-camY;
-
-// Perspective projection from camera viewpoint
-let sy=horizon-relY*focal/dz+shakeY;
-let sx=W/2+accCurve*W*0.15/dz+shakeX;
-let tw=Math.max(W,W*2.5/dz);
-
-segs.push({si:si,sx:sx,sy:sy,tw:tw,dz:dz,gh:groundH});
-}
-
-// Render strips far to near (painter's algorithm)
-for(let k=segs.length-1;k>0;k--){
-let f=segs[k],nr=segs[k-1];
-if(f.sy<-50&&nr.sy<-50)continue;
-
-let t=1-Math.max(0,Math.min(1,(f.gh-pY+8)/16));
-let col=`rgb(${138+t*102|0},${138+t*107|0},${138+t*112|0})`;
-
-D(f.sx,f.sy,f.tw,nr.sx,nr.sy+1,nr.tw,col);
-
-// Slope shading: sun-facing=warm, shadow=cool
-let dh=nr.gh-f.gh;
-if(Math.abs(dh)>0.08){
-g.globalAlpha=Math.min(0.2,Math.abs(dh)*0.4);
-D(f.sx,f.sy,f.tw,nr.sx,nr.sy+1,nr.tw,dh>0?'#ffe':'#336');
-g.globalAlpha=1;
-}
-}
+// 3D column raycaster terrain
+renderTerrain();
 
 // Acceleration streaks (from player)
 if(accelVal>0.15&&state==1){
-let n=(accelVal*14)|0;
+let n=(accelVal*5)|0;
 for(let i=0;i<n;i++){
 let a=Math.random()*PI*2;
-let r1=15+Math.random()*35;
-let r2=r1+25+accelVal*30;
+let r1=20+Math.random()*30;
+let r2=r1+20+accelVal*80;
 g.strokeStyle=`rgba(255,255,255,${Math.min(0.5,accelVal*0.2)})`;
 g.lineWidth=1.5+accelVal*0.5;
 g.beginPath();
@@ -177,31 +189,36 @@ g.stroke();
 }}
 
 // === 5. RENDER BOBSLED TEAM ===
-let playerDZ=pZ-camZ;
-if(playerDZ>0.3){
-let relX=pX-camX;
-let relY=pY-camY;
-pScrX=W/2+(playerAccCurve+relX*2)*W*0.15/playerDZ+shakeX;
-pScrY=horizon-relY*focal/playerDZ+shakeY;
-let pSc=18/playerDZ;
-let ph=pZ*2;
+let pp=project(pX,pY,pZ);
+if(pp.z>0.3){
+pScrX=pp.x;pScrY=pp.y;
+let pSc=18/pp.z;
+let ph=pZ*4;
+// Dog lateral offset from steering
+let dogSteer=turnRate*0.5;
 // Lead dogs (4 units ahead on terrain)
-let lZ=pZ+4-camZ,lR=getHeight(pX,pZ+4)-camY;
-let lX=W/2+(playerAccCurve+relX*2)*W*0.15/lZ+shakeX;
-let lY=horizon-lR*focal/lZ+shakeY;let lS=27/lZ;
+let lXw=pX+dogSteer;
+let lp=project(lXw,getHeight(lXw,pZ+4),pZ+4);
+let lS=27/lp.z;
 // Wheel dogs (2 units ahead)
-let wZ=pZ+2-camZ,wR=getHeight(pX,pZ+2)-camY;
-let wX=W/2+(playerAccCurve+relX*2)*W*0.15/wZ+shakeX;
-let wY=horizon-wR*focal/wZ+shakeY;let wS=27/wZ;
+let wXw=pX+dogSteer*0.6;
+let wp=project(wXw,getHeight(wXw,pZ+2),pZ+2);
+let wS=27/wp.z;
+// Dog screen positions (tighter spread)
+let ldLx=lp.x-8*lS,ldRx=lp.x+8*lS;
+let wdLx=wp.x-6*wS,wdRx=wp.x+6*wS;
 // Draw far to near: lead, wheel, harness, sled
-drawDog(lX-14*lS,lY,lS,ph);
-drawDog(lX+14*lS,lY,lS,ph+PI*.5);
-drawDog(wX-10*wS,wY,wS,ph+PI);
-drawDog(wX+10*wS,wY,wS,ph+PI*1.5);
-// Harness lines
+drawDog(ldLx,lp.y,lS,ph);
+drawDog(ldRx,lp.y,lS,ph+PI*.5);
+drawDog(wdLx,wp.y,wS,ph+PI);
+drawDog(wdRx,wp.y,wS,ph+PI*1.5);
+// Harness: lead dogs to wheel dogs
 g.strokeStyle='#654';g.lineWidth=1;
-g.beginPath();g.moveTo(pScrX-3*pSc,pScrY-2*pSc);g.lineTo(lX-14*lS,lY);g.stroke();
-g.beginPath();g.moveTo(pScrX+3*pSc,pScrY-2*pSc);g.lineTo(lX+14*lS,lY);g.stroke();
+g.beginPath();g.moveTo(ldLx,lp.y-5*lS);g.lineTo(wdLx,wp.y-5*wS);g.stroke();
+g.beginPath();g.moveTo(ldRx,lp.y-5*lS);g.lineTo(wdRx,wp.y-5*wS);g.stroke();
+// Harness: wheel dogs to sled
+g.beginPath();g.moveTo(wdLx,wp.y-5*wS);g.lineTo(pScrX-3*pSc,pScrY-2*pSc);g.stroke();
+g.beginPath();g.moveTo(wdRx,wp.y-5*wS);g.lineTo(pScrX+3*pSc,pScrY-2*pSc);g.stroke();
 drawSled(pScrX,pScrY,pSc);
 }
 
@@ -260,26 +277,28 @@ g.restore();
 function drawSled(x,y,sc){
 let lean=turnRate*0.3;
 g.save();g.translate(x,y);g.scale(sc,sc);g.rotate(lean*0.15);
-// Shadow (tight under runners)
+// Shadow
 g.fillStyle='rgba(0,0,0,0.15)';
 g.beginPath();g.ellipse(0,11,13,3,0,0,PI*2);g.fill();
 // Runners
-g.fillStyle='#543';
-g.fillRect(-12,8,24,2);g.fillRect(-13,5,2,4);g.fillRect(11,5,2,4);
+g.fillStyle='#654321';
+g.fillRect(-8,7,18,1);g.fillRect(-8,9,18,1);
 // Sled body
-g.fillStyle='#964';g.fillRect(-9,2,18,6);
-// Rider (CMU red)
-g.fillStyle='#c41';g.fillRect(-5,-6,10,10);
+g.fillStyle='#8B4513';g.fillRect(-7,5,14,2);
+// Curved front
+g.fillRect(9,6,2,1);g.fillRect(10,5,1,1);
+// Student body (dark jacket)
+g.fillStyle='#445';g.fillRect(-3,-2,6,7);
+// Scarf
+g.fillStyle='#c49102';g.fillRect(-3,0,6,1);
 // Arms holding reins
-g.strokeStyle='#222';g.lineWidth=2;
-g.beginPath();g.moveTo(-5,-2);g.lineTo(-9,2);g.stroke();
-g.beginPath();g.moveTo(5,-2);g.lineTo(9,2);g.stroke();
+g.fillStyle='#445';g.fillRect(-4,0,1,3);g.fillRect(3,0,1,3);
 // Head
-g.fillStyle='#fdb';g.beginPath();g.arc(0,-9,4,0,PI*2);g.fill();
-// Helmet
-g.fillStyle='#c41';g.beginPath();g.arc(0,-10,4,PI,0);g.fill();
-// Goggles
-g.fillStyle='#333';g.fillRect(-3,-10,6,2);
+g.fillStyle='#dba';g.fillRect(-2,-5,4,3);
+// Beanie
+g.fillStyle='#bb0000';g.fillRect(-2,-7,4,2);
+// Pom pom
+g.fillStyle='#fff';g.fillRect(-1,-8,2,1);
 g.restore();
 }
 
@@ -327,14 +346,14 @@ speed+=gravity*dt;
 speed-=(friction+turnDrag)*speed*dt;
 speed-=airDrag*dt;
 if(slopeVal>0)speed-=slopeVal*slopeVal*0.15*dt;
-speed=Math.max(5,Math.min(speed,25));
+speed=Math.max(7.5,Math.min(speed,30));
 accelVal=lerp(accelVal,Math.max(0,(speed-prevSpd)/dt),Math.min(1,dt*10));
 prevSpd=speed;
 
 // Steering
 let curv=curvature(pZ)*0.002;
-turnRate+=(inputX*1.5-turnRate)*dt*4;
-pX+=turnRate*dt*0.8;
+turnRate+=(inputX*1.0-turnRate)*dt*4;
+pX+=turnRate*dt*0.5;
 pX+=curv*speed*dt*0.1;
 
 // Move forward
@@ -353,6 +372,8 @@ let dh=Math.min(2.5,Math.max(0,-slopeVal));
 camX=lerp(camX,pX,t);
 camY=lerp(camY,pY+2+dh*1.2,Math.min(1,dt*8));
 camZ=lerp(camZ,pZ-3-dh*0.6,t);
+// Camera yaw: look toward a point ahead of the player
+camAngle=Math.atan2(pX-camX,pZ+4-camZ);
 
 // Snow effects
 if(Math.abs(turnRate)>0.5&&speed>3){
@@ -450,10 +471,10 @@ function resetGame(){
 pX=0;pZ=0;
 for(let z=0;z<200;z++){if(getHeight(0,z+2)-getHeight(0,z-2)<-0.3){pZ=z;break;}}
 pY=getHeight(0,pZ);
-speed=5;turnRate=0;
-camX=0;camY=pY+2;camZ=pZ-3;
+speed=7.5;turnRate=0;
+camX=0;camY=pY+2;camZ=pZ-3;camAngle=0;
 score=0;combo=1;maxCombo=1;crashed=0;crashTimer=0;
-particles=[];shakeX=0;shakeY=0;prevSpd=5;accelVal=0;smoothFov=0.65;
+particles=[];shakeX=0;shakeY=0;prevSpd=7.5;accelVal=0;smoothFov=0.65;
 }
 
 let keys={};
