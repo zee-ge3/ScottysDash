@@ -1,819 +1,874 @@
-<!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,user-scalable=no"><title>Infinite Ski</title><style>*{margin:0;padding:0}body{background:#000;overflow:hidden;touch-action:none}canvas{display:block}</style></head><body><canvas id=c></canvas><script>
-// ZzFX Micro - Sound Generator
-zzfxG=(p=1,k=.05,b=.22,e=0,r=0,t=.1,u=0,f=1,v=0,z=0,w=0,A=0,l=0,B=0,C=0,F=0,d=0,q=1,h=0,I=0)=>{let a=2*Math.PI,R=44100,m=Math.max,s=v*=500*a/R/R,O=b*R|0,n=t*R|0,J=e*R|0,E=r*R|0,X=d*R|0,Y=h*R|0,Z=I*R|0,T=O+J+n+E+X,i=T,o=[],y=0,j=0,K=0;for(;K<i;K++){let L=K/R,M=K<O?K/O:K<O+J?1:K<T-E?m(0,1-(K-O-J)/n):K<T?m(0,1-((K-T+E)/E)):0;M=M<=0?0:M;y+=1+u*2*a/R;let N=Math.sin(y)*M*p*(1+B*Math.sin(2*a*L*l));j+=N;if(z||w||A){s+=w*500*a/R/R;v=z*500*a/R+s;j+=Math.sin(v)*A*M}o.push(F?K<Y?0:K>T-Z?0:N*(1+C*Math.sin(2*a*L*f)):N*(1+C*Math.sin(2*a*L*f)))}return o};
+<!DOCTYPE html>
+<html>
 
-let c=document.getElementById('c'),g=c.getContext('2d');
-let W,H;
-function resize(){W=c.width=innerWidth;H=c.height=innerHeight}
-resize();onresize=resize;
-
-const PI=Math.PI;
-let state=0,speed=0,turnRate=0;
-let score=0,combo=1,maxCombo=1,hiScore=+localStorage.getItem('hs')||0;
-let inputX=0,inputTuck=0,crashed=0,crashTimer=0;
-let particles=[],shakeX=0,shakeY=0;
-// Obstacles: {x,z,type} type: 0=pine tree, 1=rock, 2=bare tree
-let obstacles=[],lastSpawnZ=0,sndCrash;
-let lastTime=0,audioCtx,sndCarve;
-// Player world position
-let pX=0,pY=0,pZ=0;
-// Camera world position (smoothed, decoupled from player)
-let camX=0,camY=3,camZ=-5;
-let camAngle=0;
-// Player screen position (updated by render, used by particles)
-let pScrX=0,pScrY=0,pScrSc=1,slopeVal=0,prevSpd=7.5,accelVal=0,smoothFov=0.65;
-// Terrain silhouette buffer - stores top-most rendered pixel per screen column
-let terrainSil=[];
-
-function lerp(a,b,t){return a+(b-a)*t}
-
-// Project world coords to screen via camera rotation + perspective divide
-function project(wx,wy,wz){
-let dx=wx-camX,dy=wy-camY,dz=wz-camZ;
-let cs=Math.cos(camAngle),sn=Math.sin(camAngle);
-let rz=dx*sn+dz*cs;
-let rx=dx*cs-dz*sn;
-if(rz<0.3)rz=0.3;
-let focal=H*smoothFov;
-let horizon=H*0.38;
-let sx=W/2+rx*focal/rz+shakeX;
-let sy=horizon-dy*focal/rz+shakeY;
-let sc=focal/rz;
-return {x:sx,y:sy,s:sc,z:rz};
-}
-
-function initAudio(){
-if(audioCtx)return;
-try{
-audioCtx=new(window.AudioContext||webkitAudioContext);
-audioCtx.resume();
-sndCarve=zzfxG(.3,.02,.08,0,.04,.04,2,1.5);
-sndCrash=zzfxG(1,.05,.3,.1,.1,.3,3,.5,0,0,0,0,0,0,0,.5);
-}catch(e){}
-}
-function playBuf(buf){
-if(!audioCtx||!buf)return;
-try{
-let b=audioCtx.createBuffer(1,buf.length,44100),d=b.getChannelData(0);
-for(let i=0;i<buf.length;i++)d[i]=buf[i];
-let s=audioCtx.createBufferSource();
-s.buffer=b;s.connect(audioCtx.destination);s.start();
-}catch(e){}
-}
-
-// === 1. SOURCE OF TRUTH: Height function ===
-function getHeight(x,z){
-return (Math.sin(z*0.018)*40+Math.sin(z*0.046)*20+Math.sin(z*0.102)*10
-+Math.sin(z*0.2)*8+Math.sin(x*0.08+z*0.024)*5)*0.25-z*0.04;
-}
-
-// Visual curvature (lateral path bending for aesthetics)
-function curvature(z){return Math.sin(z*0.013)*5+Math.sin(z*0.029)*3+Math.sin(z*0.067)*1.5}
-function terrainType(i){let v=Math.sin(i*0.037)*0.5+0.5;if(i>500)v+=0.15;if(i>1500)v+=0.15;return v<0.25?0:v<0.6?1:v<0.8?2:3}
-
-// Column raycaster terrain renderer
-function renderTerrain(){
-let horizon=H*0.38;
-let focal=H*smoothFov;
-let colStep=W>1200?4:3;
-let skyR=192,skyG2=221,skyB=240; // fog/sky color #c0ddf0
-
-// Reset silhouette buffer
-terrainSil=new Array(W).fill(H);
-
-for(let col=0;col<W;col+=colStep){
-let screenX=(col-W/2)/focal;
-let rayAng=camAngle+Math.atan(screenX);
-let rayDx=Math.sin(rayAng);
-let rayDz=Math.cos(rayAng);
-let maxY=H;
-let dist=1.0;
-let perpCos=Math.cos(Math.atan(screenX));
-
-for(let step=0;step<130;step++){
-let wx=camX+rayDx*dist;
-let wz=camZ+rayDz*dist;
-let h=getHeight(wx,wz);
-let perpDist=dist*perpCos;
-let screenY=horizon+(camY-h)*focal/perpDist+shakeY;
-
-if(screenY<maxY){
-// Snow color based on height relative to player
-let t=1-Math.max(0,Math.min(1,(h-pY+8)/16));
-let baseR=90+t*160;
-let baseG=95+t*155;
-let baseB=110+t*140;
-
-// Slope shading via height offset sampling
-let hFwd=getHeight(wx+rayDx*0.5,wz+rayDz*0.5);
-let slopeDh=hFwd-h;
-if(slopeDh>0.03){let sh=Math.min(0.45,slopeDh*0.8);baseR+=sh*90;baseG+=sh*85;baseB+=sh*50;}
-else if(slopeDh<-0.03){let sh=Math.min(0.45,-slopeDh*0.8);baseR-=sh*70;baseG-=sh*60;baseB+=sh*30;}
-
-// Distance fog blending
-let fogT=Math.min(1,dist*dist*0.0004);
-let r=baseR*(1-fogT)+skyR*fogT;
-let gv=baseG*(1-fogT)+skyG2*fogT;
-let b=baseB*(1-fogT)+skyB*fogT;
-
-g.fillStyle=`rgb(${r|0},${gv|0},${b|0})`;
-g.fillRect(col,screenY|0,colStep,maxY-screenY+1);
-maxY=screenY;
-}
-
-if(maxY<=0)break;
-dist+=0.3+dist*0.012;
-if(dist>50)break;
-}
-
-// Store silhouette for this column range
-let silY=maxY|0;
-for(let cc=col;cc<col+colStep&&cc<W;cc++){
-terrainSil[cc]=silY;
-}
-}
-}
-
-// Mountain range with optional snow caps
-function drawMtn(by,h,s,c,ox,sc,sn){
-g.fillStyle=c;g.beginPath();g.moveTo(-20,H);
-for(let i=-20;i<=W+20;i+=6){
-let w=i+ox,m=Math.sin(w*.005+s)*h*.4+Math.sin(w*.013+s*2.3)*h*.35+Math.sin(w*.027+s*4.7)*h*.25;
-g.lineTo(i,by-m);
-}
-g.lineTo(W+20,H);g.closePath();g.fill();
-if(sc){
-g.fillStyle=sc;g.beginPath();
-let sl=h*(sn||.45);
-g.moveTo(-20,by-sl);
-for(let i=-20;i<=W+20;i+=6){
-let w=i+ox,slv=sl+Math.sin(w*.05+s*2)*h*.04;
-let m=Math.sin(w*.005+s)*h*.4+Math.sin(w*.013+s*2.3)*h*.35+Math.sin(w*.027+s*4.7)*h*.25;
-g.lineTo(i,m>slv?by-m:by-sl);
-}
-g.lineTo(W+20,by-sl);g.closePath();g.fill();
-}
-}
-
-// === 4. RENDERING: Project world from camera perspective ===
-function render(){
-// Full-screen sky gradient
-let skyG=g.createLinearGradient(0,0,0,H);
-skyG.addColorStop(0,'#3a7fb7');
-skyG.addColorStop(0.3,'#7ab8e0');
-skyG.addColorStop(0.55,'#c0ddf0');
-skyG.addColorStop(1,'#e0e8f0');
-g.fillStyle=skyG;
-g.fillRect(0,0,W,H);
-
-// Sun
-let sunX=W*0.75,sunY=H*0.12;
-let sunG=g.createRadialGradient(sunX,sunY,5,sunX,sunY,H*0.13);
-sunG.addColorStop(0,'rgba(255,255,230,0.9)');
-sunG.addColorStop(0.15,'rgba(255,250,200,0.5)');
-sunG.addColorStop(0.5,'rgba(255,240,180,0.15)');
-sunG.addColorStop(1,'rgba(255,240,180,0)');
-g.fillStyle=sunG;
-g.beginPath();g.arc(sunX,sunY,H*0.13,0,PI*2);g.fill();
-g.fillStyle='#fffde8';
-g.beginPath();g.arc(sunX,sunY,10,0,PI*2);g.fill();
-
-// Mountain ranges with parallax (far to near, each fills to screen bottom)
-let px=-camAngle*W*0.6,fz=camZ*0.05;
-drawMtn(H*0.22,100,0.5,'#b0c0d4',-px*0.15+fz*0.2,'#e8eef4',.2);
-drawMtn(H*0.30,85,1.7,'#9aabbd',-px*0.35+fz*0.4,'#d0dce8',.35);
-drawMtn(H*0.38,65,3.1,'#8494a8',-px*0.7+fz*1,'#c0cad6',.25);
-drawMtn(H*0.45,50,5.3,'#7080a0',-px*1.2+fz*1.5);
-
-// 3D column raycaster terrain
-renderTerrain();
-
-// Render obstacles (trees, rocks)
-if(state==1||state==2)renderObstacles();
-
-// Acceleration streaks (from player)
-if(accelVal>0.15&&state==1){
-let n=(accelVal*5)|0;
-for(let i=0;i<n;i++){
-let a=Math.random()*PI*2;
-let r1=20+Math.random()*30;
-let r2=r1+20+accelVal*80;
-g.strokeStyle=`rgba(255,255,255,${Math.min(0.5,accelVal*0.2)})`;
-g.lineWidth=1.5+accelVal*0.5;
-g.beginPath();
-g.moveTo(pScrX+Math.cos(a)*r1,pScrY+Math.sin(a)*r1*0.5);
-g.lineTo(pScrX+Math.cos(a)*r2,pScrY+Math.sin(a)*r2*0.5);
-g.stroke();
-}}
-
-// === 5. RENDER BOBSLED TEAM ===
-let pp=project(pX,pY,pZ);
-if(pp.z>0.3){
-pScrX=pp.x;pScrY=pp.y;
-let pSc=pScrSc=18/pp.z;
-let ph=pZ*4;
-// Dog lateral offset from steering
-let dogSteer=turnRate*0.5;
-// Lead dogs (4 units ahead on terrain)
-let lXw=pX+dogSteer;
-let lp=project(lXw,getHeight(lXw,pZ+4),pZ+4);
-let lS=27/lp.z;
-// Wheel dogs (2 units ahead)
-let wXw=pX+dogSteer*0.6;
-let wp=project(wXw,getHeight(wXw,pZ+2),pZ+2);
-let wS=27/wp.z;
-// Dog screen positions (tighter spread)
-let ldLx=lp.x-8*lS,ldRx=lp.x+8*lS;
-let wdLx=wp.x-6*wS,wdRx=wp.x+6*wS;
-// Draw far to near: lead, wheel, harness, sled
-drawDog(ldLx,lp.y,lS,ph);
-drawDog(ldRx,lp.y,lS,ph+PI*.5);
-drawDog(wdLx,wp.y,wS,ph+PI);
-drawDog(wdRx,wp.y,wS,ph+PI*1.5);
-// Harness: lead dogs to wheel dogs
-g.strokeStyle='#654';g.lineWidth=1;
-g.beginPath();g.moveTo(ldLx,lp.y-5*lS);g.lineTo(wdLx,wp.y-5*wS);g.stroke();
-g.beginPath();g.moveTo(ldRx,lp.y-5*lS);g.lineTo(wdRx,wp.y-5*wS);g.stroke();
-// Harness: wheel dogs to sled
-g.beginPath();g.moveTo(wdLx,wp.y-5*wS);g.lineTo(pScrX-3*pSc,pScrY-2*pSc);g.stroke();
-g.beginPath();g.moveTo(wdRx,wp.y-5*wS);g.lineTo(pScrX+3*pSc,pScrY-2*pSc);g.stroke();
-drawSled(pScrX,pScrY,pSc);
-}
-
-// Particles
-for(let i=particles.length-1;i>=0;i--){
-let p=particles[i];
-p.x+=p.vx;p.y+=p.vy;p.vy+=0.1;p.life--;
-g.fillStyle=`rgba(255,255,255,${p.life/p.ml})`;
-g.fillRect(p.x,p.y,p.sz,p.sz);
-if(p.life<=0)particles.splice(i,1);
-}
-}
-
-// CMU Scotty dog (side-profile, bouncing, turns with steering)
-function drawDog(x,y,sc,ph){
-g.save();g.translate(x,y);g.scale(sc,sc);
-g.rotate(turnRate*0.12);
-let dir=turnRate>0.1?1:turnRate<-0.1?-1:0;
-// Bounce
-let b=Math.abs(Math.sin(ph))*2;
-let by=-b;
-g.fillStyle='#111';
-// Body
-g.fillRect(-3,by-5,7,3);
-// Head
-let hx=dir;
-g.fillRect(-2+hx,by-8,5,3);
-// Snout
-g.fillRect(2+hx,by-7,2,2);
-// Ears
-g.fillRect(-2+hx,by-10,1,2);
-g.fillRect(2+hx,by-10,1,2);
-// Legs (animated trot)
-let la=Math.sin(ph);
-g.fillRect(-2,by-2,1,3+la);
-g.fillRect(2,by-2,1,3-la);
-g.fillRect(-1,by-2,1,2-la);
-g.fillRect(1,by-2,1,2+la);
-// Tail (wagging)
-let wag=Math.sin(ph*1.3);
-g.fillRect(-3+wag,by-7,1,2);
-// Eyes
-g.fillStyle='#fff';
-g.fillRect(hx,by-7,1,1);
-// Tartan scarf (red + green plaid)
-for(let i=0;i<7;i++){
-g.fillStyle=(i%2==0)?'#bb0000':'#006b00';
-g.fillRect(-3+i,by-5,1,1);
-g.fillStyle=(i%2==0)?'#006b00':'#bb0000';
-g.fillRect(-3+i,by-4,1,1);
-}
-g.restore();
-}
-
-// Bobsled + rider
-function drawSled(x,y,sc){
-let lean=turnRate*0.3;
-g.save();g.translate(x,y);g.scale(sc,sc);g.rotate(lean*0.15);
-// Shadow
-g.fillStyle='rgba(0,0,0,0.15)';
-g.beginPath();g.ellipse(0,11,13,3,0,0,PI*2);g.fill();
-// Runners
-g.fillStyle='#654321';
-g.fillRect(-8,7,18,1);g.fillRect(-8,9,18,1);
-// Sled body
-g.fillStyle='#8B4513';g.fillRect(-7,5,14,2);
-// Curved front
-g.fillRect(9,6,2,1);g.fillRect(10,5,1,1);
-// Student body (dark jacket)
-g.fillStyle='#445';g.fillRect(-3,-2,6,7);
-// Scarf
-g.fillStyle='#c49102';g.fillRect(-3,0,6,1);
-// Arms holding reins
-g.fillStyle='#445';g.fillRect(-4,0,1,3);g.fillRect(3,0,1,3);
-// Head
-g.fillStyle='#dba';g.fillRect(-2,-5,4,3);
-// Beanie
-g.fillStyle='#bb0000';g.fillRect(-2,-7,4,2);
-// Pom pom
-g.fillStyle='#fff';g.fillRect(-1,-8,2,1);
-g.restore();
-}
-
-function spraySnow(){
-for(let i=0;i<3;i++){
-particles.push({
-x:pScrX+(turnRate>0?10:-8)*pScrSc,y:pScrY+9*pScrSc,
-vx:turnRate*3+Math.random()*2-1,
-vy:-Math.random()*3-1,
-life:15+Math.random()*10|0,ml:25,
-sz:2+Math.random()*3
-});
-}
-}
-
-function ambientSnow(){
-if(Math.random()<0.3+speed*0.05){
-particles.push({
-x:Math.random()*W,y:-5,
-vx:turnRate*0.5+Math.random()-0.5,
-vy:1+Math.random()*2+speed*0.3,
-life:60+Math.random()*40|0,ml:100,
-sz:1+Math.random()*2
-});
-}
-}
-
-// === OBSTACLE SYSTEM ===
-// Procedural obstacle placement: uses world-coordinate seeded randomness
-// so obstacles exist everywhere and are consistent no matter where you go
-function seedRand(a,b){
-  // Simple hash to get a deterministic 0-1 from two integers
-  let h=(a*2654435761^b*2246822519)&0x7fffffff;
-  return (h%10000)/10000;
-}
-
-function spawnObstacles(){
-  // Cell size in world units
-  let cellZ=5, cellX=6;
-  // Range around player to populate
-  let rangeX=60; // far left/right of player
-  let rangeZbehind=10, rangeZahead=80;
-
-  let minCZ=Math.floor((pZ-rangeZbehind)/cellZ);
-  let maxCZ=Math.floor((pZ+rangeZahead)/cellZ);
-  let minCX=Math.floor((pX-rangeX)/cellX);
-  let maxCX=Math.floor((pX+rangeX)/cellX);
-
-  for(let cz=minCZ;cz<=maxCZ;cz++){
-    for(let cx=minCX;cx<=maxCX;cx++){
-      // Unique key for this cell
-      let key=cz*10000+cx;
-      // Skip if already spawned
-      if(spawnedCells.has(key))continue;
-      spawnedCells.add(key);
-
-      // Deterministic random for this cell
-      let r1=seedRand(cz,cx);
-      let r2=seedRand(cx*37,cz*73);
-      let r3=seedRand(cz*113,cx*191);
-
-      // ~60% chance a cell has an obstacle (density increases over time)
-      let density=0.55+Math.min(0.25,pZ/2000);
-      if(r1>density)continue;
-
-      // Position within cell
-      let oz=cz*cellZ+r2*cellZ;
-      let ox=cx*cellX+r3*cellX;
-
-      // Don't spawn right on top of player start
-      if(oz<20&&Math.abs(ox)<8)continue;
-
-      // Leave a safe corridor near the player's current path
-      // (only for obstacles at roughly the same Z)
-      let dzToPlayer=oz-pZ;
-      if(dzToPlayer>5&&dzToPlayer<20&&Math.abs(ox-pX)<3)continue;
-
-      let type=r2<0.5?0:r2<0.8?1:2;
-      obstacles.push({x:ox,z:oz,type,hit:false});
-    }
-  }
-}
-
-// Track which cells we've already generated
-let spawnedCells=new Set();
-
-function cleanupObstacles(){
-  let cellZ=5, cellX=6;
-  for(let i=obstacles.length-1;i>=0;i--){
-    let ob=obstacles[i];
-    // Remove if far behind or far to the side
-    if(ob.z<pZ-25||Math.abs(ob.x-pX)>80){
-      // Also remove the cell key so it can respawn if we come back (won't happen in practice)
-      let cz=Math.floor(ob.z/cellZ);
-      let cx=Math.floor(ob.x/cellX);
-      spawnedCells.delete(cz*10000+cx);
-      obstacles.splice(i,1);
-    }
-  }
-}
-
-function drawTree(sx,sy,sc,type,fogT){
-  // Fog blends colors toward sky
-  let skyR=192,skyG=221,skyB=240;
-  function fogCol(r,gv,b){
-    return `rgb(${(r*(1-fogT)+skyR*fogT)|0},${(gv*(1-fogT)+skyG*fogT)|0},${(b*(1-fogT)+skyB*fogT)|0})`;
-  }
-  if(type===0){
-    // Pine tree - triangle layers
-    let h=sc*4;
-    let w=sc*1.8;
-    // Trunk
-    g.fillStyle=fogCol(70,45,20);
-    g.fillRect(sx-sc*0.2,sy-h*0.15,sc*0.4,h*0.2);
-    // Tree layers (bottom to top)
-    for(let i=0;i<3;i++){
-      let ly=sy-h*0.15-h*i*0.22;
-      let lw=w*(1-i*0.22);
-      // Dark green body
-      g.fillStyle=fogCol(20+i*8,70+i*10,30+i*5);
-      g.beginPath();
-      g.moveTo(sx-lw,ly);
-      g.lineTo(sx,ly-h*0.32);
-      g.lineTo(sx+lw,ly);
-      g.closePath();
-      g.fill();
-    }
-    // Snow on branches
-    g.fillStyle=fogCol(230,240,245);
-    for(let i=0;i<3;i++){
-      let ly=sy-h*0.15-h*i*0.22;
-      let lw=w*(1-i*0.22)*0.65;
-      g.beginPath();
-      g.moveTo(sx-lw,ly-h*0.04);
-      g.lineTo(sx,ly-h*0.32);
-      g.lineTo(sx+lw,ly-h*0.04);
-      g.closePath();
-      g.fill();
-    }
-  } else if(type===1){
-    // Rock
-    let sz=sc*1.6;
-    g.fillStyle=fogCol(85,90,105);
-    g.beginPath();
-    g.moveTo(sx-sz,sy);
-    g.lineTo(sx-sz*0.7,sy-sz*1.1);
-    g.lineTo(sx+sz*0.3,sy-sz*1.5);
-    g.lineTo(sx+sz,sy-sz*0.7);
-    g.lineTo(sx+sz*0.8,sy);
-    g.closePath();
-    g.fill();
-    // Highlight
-    g.fillStyle=fogCol(120,125,140);
-    g.beginPath();
-    g.moveTo(sx-sz*0.6,sy-sz*0.6);
-    g.lineTo(sx+sz*0.3,sy-sz*1.5);
-    g.lineTo(sx+sz*0.7,sy-sz*0.8);
-    g.closePath();
-    g.fill();
-    // Snow cap
-    g.fillStyle=fogCol(210,220,230);
-    g.beginPath();
-    g.moveTo(sx-sz*0.4,sy-sz*0.95);
-    g.lineTo(sx+sz*0.3,sy-sz*1.5);
-    g.lineTo(sx+sz*0.65,sy-sz*0.8);
-    g.closePath();
-    g.fill();
-  } else {
-    // Bare tree / dead tree
-    let h=sc*3.5;
-    g.strokeStyle=fogCol(60,42,25);
-    g.lineWidth=Math.max(1.5,sc*0.25);
-    // Trunk
-    g.beginPath();g.moveTo(sx,sy);g.lineTo(sx,sy-h);g.stroke();
-    // Branches
-    g.lineWidth=Math.max(1,sc*0.15);
-    g.beginPath();g.moveTo(sx,sy-h*0.45);g.lineTo(sx-sc*1.3,sy-h*0.65);g.stroke();
-    g.beginPath();g.moveTo(sx,sy-h*0.58);g.lineTo(sx+sc*1.5,sy-h*0.78);g.stroke();
-    g.beginPath();g.moveTo(sx,sy-h*0.72);g.lineTo(sx-sc*0.8,sy-h*0.92);g.stroke();
-    g.beginPath();g.moveTo(sx,sy-h*0.85);g.lineTo(sx+sc*0.6,sy-h*0.98);g.stroke();
-  }
-}
-
-function renderObstacles(){
-  let horizon=H*0.38;
-  let focal=H*smoothFov;
-  // Sort back-to-front
-  let visible=[];
-  for(let i=0;i<obstacles.length;i++){
-    let ob=obstacles[i];
-    let wy=getHeight(ob.x,ob.z);
-    let p=project(ob.x,wy,ob.z);
-    if(p.z>0.5&&p.z<45&&p.x>-200&&p.x<W+200){
-      visible.push({ob,p,wy});
-    }
-  }
-  visible.sort((a,b)=>b.p.z-a.p.z);
-  for(let i=0;i<visible.length;i++){
-    let {ob,p,wy}=visible[i];
-    let sc=80/p.z;
-    let fogT=Math.min(1,p.z*p.z*0.0004);
-
-    // Determine the screen extent of this obstacle
-    let obLeft=Math.max(0,Math.floor(p.x-sc*2.5));
-    let obRight=Math.min(W-1,Math.ceil(p.x+sc*2.5));
-
-    // Find the terrain silhouette top across the obstacle's screen columns
-    // This is the actual highest terrain pixel from the raycaster
-    let clipY=H;
-    for(let col=obLeft;col<=obRight;col++){
-      if(terrainSil[col]<clipY)clipY=terrainSil[col];
+<head>
+  <meta charset=utf-8>
+  <meta name=viewport content="width=device-width,initial-scale=1,user-scalable=no">
+  <title>Stranded at Seven Springs</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0
     }
 
-    // If the obstacle base is above terrain silhouette, fully hidden
-    if(p.y<clipY-2)continue;
-
-    // Build a clipping path that follows the terrain silhouette
-    g.save();
-    g.beginPath();
-    // Walk along the terrain silhouette for this obstacle's columns
-    let clipLeft=Math.max(0,obLeft-10);
-    let clipRight=Math.min(W-1,obRight+10);
-    g.moveTo(clipLeft,terrainSil[clipLeft]);
-    let step=2;
-    for(let col=clipLeft;col<=clipRight;col+=step){
-      g.lineTo(col,terrainSil[Math.min(col,W-1)]);
+    body {
+      background: #000;
+      overflow: hidden;
+      touch-action: none
     }
-    g.lineTo(clipRight,terrainSil[clipRight]);
-    // Close the path down to screen bottom and back
-    g.lineTo(clipRight,H);
-    g.lineTo(clipLeft,H);
-    g.closePath();
-    g.clip();
 
-    // Shadow on ground
-    g.fillStyle=`rgba(0,0,0,${0.15*(1-fogT)})`;
-    let shSz=sc*0.8;
-    g.beginPath();g.ellipse(p.x,p.y+shSz*0.15,shSz*1.2,shSz*0.25,0,0,PI*2);g.fill();
-    drawTree(p.x,p.y,sc,ob.type,fogT);
-    g.restore();
-  }
-}
+    canvas {
+      display: block
+    }
+  </style>
+</head>
 
-function checkCollisions(){
-  // Only the rider triggers a crash - rider sits at pX, pZ
-  // Rider body is narrow (~0.6 world units wide)
-  let hitRadiusX=0.7;
-  let hitRadiusZ=1.0;
-  for(let i=0;i<obstacles.length;i++){
-    let ob=obstacles[i];
-    if(ob.hit)continue;
-    let dz=ob.z-pZ;
-    let dx=ob.x-pX;
-    if(Math.abs(dz)<hitRadiusZ&&Math.abs(dx)<hitRadiusX){
-      ob.hit=true;
-      // CRASH!
-      crashed=1;
-      state=2;
-      crashTimer=1.5;
-      // Screen shake
-      shakeX=(Math.random()-0.5)*20;
-      shakeY=(Math.random()-0.5)*15;
-      // Crash particles
-      for(let j=0;j<25;j++){
+<body><canvas id=c></canvas>
+  <script>
+    let c = document.getElementById('c'), g = c.getContext('2d');
+    let W, H;
+    function resize() { W = c.width = innerWidth; H = c.height = innerHeight }
+    resize(); onresize = resize;
+
+    const PI = Math.PI;
+    let state = 0, speed = 0, turnRate = 0;
+    let score = 0, combo = 1, maxCombo = 1, hiScore = +localStorage.getItem('hs') || 0;
+    let inputX = 0, inputTuck = 0, crashed = 0, crashTimer = 0;
+    let particles = [], shakeX = 0, shakeY = 0;
+    // Obstacles: {x,z,type} type: 0=pine tree, 1=rock, 2=bare tree
+    let obstacles = [], lastSpawnZ = 0;
+    let lastTime = 0;
+    // Player world position
+    let pX = 0, pY = 0, pZ = 0;
+    // Camera world position (smoothed, decoupled from player)
+    let camX = 0, camY = 3, camZ = -5;
+    let camAngle = 0;
+    // Player screen position (updated by render, used by particles)
+    let pScrX = 0, pScrY = 0, pScrSc = 1, slopeVal = 0, prevSpd = 7.5, accelVal = 0, smoothFov = 0.65, dogTurn = 0;
+    // Terrain silhouette buffer - stores top-most rendered pixel and its depth per screen column
+    let terrainSil = [], terrainSilD = [];
+
+    function lerp(a, b, t) { return a + (b - a) * t }
+
+    // Project world coords to screen via camera rotation + perspective divide
+    function project(wx, wy, wz) {
+      let dx = wx - camX, dy = wy - camY, dz = wz - camZ;
+      let cs = Math.cos(camAngle), sn = Math.sin(camAngle);
+      let rz = dx * sn + dz * cs;
+      let rx = dx * cs - dz * sn;
+      if (rz < 0.3) rz = 0.3;
+      let focal = H * smoothFov;
+      let horizon = H * 0.38;
+      let sx = W / 2 + rx * focal / rz + shakeX;
+      let sy = horizon - dy * focal / rz + shakeY;
+      let sc = focal / rz;
+      return { x: sx, y: sy, s: sc, z: rz };
+    }
+
+    // === 1. SOURCE OF TRUTH: Height function ===
+    function getHeight(x, z) {
+      return (Math.sin(z * 0.018) * 40 + Math.sin(z * 0.046) * 20 + Math.sin(z * 0.102) * 10
+        + Math.sin(z * 0.2) * 8 + Math.sin(x * 0.08 + z * 0.024) * 5) * 0.25 - z * 0.04;
+    }
+
+    // Visual curvature (lateral path bending for aesthetics)
+    function curvature(z) { return Math.sin(z * 0.013) * 5 + Math.sin(z * 0.029) * 3 + Math.sin(z * 0.067) * 1.5 }
+    function terrainType(i) { let v = Math.sin(i * 0.037) * 0.5 + 0.5; if (i > 500) v += 0.15; if (i > 1500) v += 0.15; return v < 0.25 ? 0 : v < 0.6 ? 1 : v < 0.8 ? 2 : 3 }
+
+    // Column raycaster terrain renderer
+    function renderTerrain() {
+      let horizon = H * 0.38;
+      let focal = H * smoothFov;
+      let colStep = W > 1200 ? 4 : 3;
+      let skyR = 192, skyG2 = 221, skyB = 240; // fog/sky color #c0ddf0
+
+      // Reset silhouette buffer (Y position and depth of topmost terrain pixel)
+      terrainSil = new Array(W).fill(H);
+      terrainSilD = new Array(W).fill(999);
+
+      for (let col = 0; col < W; col += colStep) {
+        let screenX = (col - W / 2) / focal;
+        let rayAng = camAngle + Math.atan(screenX);
+        let rayDx = Math.sin(rayAng);
+        let rayDz = Math.cos(rayAng);
+        let maxY = H;
+        let dist = 1.0;
+        let silDist = 999;
+        let perpCos = Math.cos(Math.atan(screenX));
+
+        for (let step = 0; step < 130; step++) {
+          let wx = camX + rayDx * dist;
+          let wz = camZ + rayDz * dist;
+          let h = getHeight(wx, wz);
+          let perpDist = dist * perpCos;
+          let screenY = horizon + (camY - h) * focal / perpDist + shakeY;
+
+          if (screenY < maxY) {
+            // Snow color based on height relative to player
+            let t = 1 - Math.max(0, Math.min(1, (h - pY + 8) / 16));
+            let baseR = 90 + t * 160;
+            let baseG = 95 + t * 155;
+            let baseB = 110 + t * 140;
+
+            // Slope shading via height offset sampling
+            let hFwd = getHeight(wx + rayDx * 0.5, wz + rayDz * 0.5);
+            let slopeDh = hFwd - h;
+            if (slopeDh > 0.03) { let sh = Math.min(0.45, slopeDh * 0.8); baseR += sh * 90; baseG += sh * 85; baseB += sh * 50; }
+            else if (slopeDh < -0.03) { let sh = Math.min(0.45, -slopeDh * 0.8); baseR -= sh * 70; baseG -= sh * 60; baseB += sh * 30; }
+
+            // Distance fog blending
+            let fogT = Math.min(1, dist * dist * 0.0004);
+            let r = baseR * (1 - fogT) + skyR * fogT;
+            let gv = baseG * (1 - fogT) + skyG2 * fogT;
+            let b = baseB * (1 - fogT) + skyB * fogT;
+
+            g.fillStyle = `rgb(${r | 0},${gv | 0},${b | 0})`;
+            g.fillRect(col, screenY | 0, colStep, maxY - screenY + 1);
+            maxY = screenY;
+            silDist = dist;
+          }
+
+          if (maxY <= 0) break;
+          dist += 0.3 + dist * 0.012;
+          if (dist > 50) break;
+        }
+
+        // Store silhouette for this column range (Y and depth of topmost terrain)
+        let silY = maxY | 0;
+        for (let cc = col; cc < col + colStep && cc < W; cc++) {
+          terrainSil[cc] = silY;
+          terrainSilD[cc] = silDist;
+        }
+      }
+    }
+
+    // Mountain range with optional snow caps
+    function drawMtn(by, h, s, c, ox, sc, sn) {
+      g.fillStyle = c; g.beginPath(); g.moveTo(-20, H);
+      for (let i = -20; i <= W + 20; i += 6) {
+        let w = i + ox, m = Math.sin(w * .005 + s) * h * .4 + Math.sin(w * .013 + s * 2.3) * h * .35 + Math.sin(w * .027 + s * 4.7) * h * .25;
+        g.lineTo(i, by - m);
+      }
+      g.lineTo(W + 20, H); g.closePath(); g.fill();
+      if (sc) {
+        g.fillStyle = sc; g.beginPath();
+        let sl = h * (sn || .45);
+        g.moveTo(-20, by - sl);
+        for (let i = -20; i <= W + 20; i += 6) {
+          let w = i + ox, slv = sl + Math.sin(w * .05 + s * 2) * h * .04;
+          let m = Math.sin(w * .005 + s) * h * .4 + Math.sin(w * .013 + s * 2.3) * h * .35 + Math.sin(w * .027 + s * 4.7) * h * .25;
+          g.lineTo(i, m > slv ? by - m : by - sl);
+        }
+        g.lineTo(W + 20, by - sl); g.closePath(); g.fill();
+      }
+    }
+
+    // === 4. RENDERING: Project world from camera perspective ===
+    function render() {
+      // Full-screen sky gradient
+      let skyG = g.createLinearGradient(0, 0, 0, H);
+      skyG.addColorStop(0, '#3a7fb7');
+      skyG.addColorStop(0.3, '#7ab8e0');
+      skyG.addColorStop(0.55, '#c0ddf0');
+      skyG.addColorStop(1, '#e0e8f0');
+      g.fillStyle = skyG;
+      g.fillRect(0, 0, W, H);
+
+      // Sun
+      let sunX = W * 0.75, sunY = H * 0.12;
+      let sunG = g.createRadialGradient(sunX, sunY, 5, sunX, sunY, H * 0.13);
+      sunG.addColorStop(0, 'rgba(255,255,230,0.9)');
+      sunG.addColorStop(0.15, 'rgba(255,250,200,0.5)');
+      sunG.addColorStop(0.5, 'rgba(255,240,180,0.15)');
+      sunG.addColorStop(1, 'rgba(255,240,180,0)');
+      g.fillStyle = sunG;
+      g.beginPath(); g.arc(sunX, sunY, H * 0.13, 0, PI * 2); g.fill();
+      g.fillStyle = '#fffde8';
+      g.beginPath(); g.arc(sunX, sunY, 10, 0, PI * 2); g.fill();
+
+      // Mountain ranges with parallax (far to near, each fills to screen bottom)
+      let px = -camAngle * W * 0.6, fz = camZ * 0.05;
+      drawMtn(H * 0.22, 100, 0.5, '#b0c0d4', -px * 0.15 + fz * 0.2, '#e8eef4', .2);
+      drawMtn(H * 0.30, 85, 1.7, '#9aabbd', -px * 0.35 + fz * 0.4, '#d0dce8', .35);
+      drawMtn(H * 0.38, 65, 3.1, '#8494a8', -px * 0.7 + fz * 1, '#c0cad6', .25);
+      drawMtn(H * 0.45, 50, 5.3, '#7080a0', -px * 1.2 + fz * 1.5);
+
+      // 3D column raycaster terrain
+      renderTerrain();
+
+      // Render obstacles (trees, rocks)
+      if (state == 1 || state == 2) renderObstacles();
+
+      // Speed streaks (from player)
+      if (speed >= 13 && state == 1) {
+        let spdF = 10 + (speed - 13) * 14 / 17;
+        let n = spdF | 0;
+        for (let i = 0; i < n; i++) {
+          let a = Math.random() * PI * 2;
+          let r1 = W * 0.25 + Math.random() * W * 0.15;
+          let r2 = r1 + 40 + (accelVal + spdF) * 60;
+          let dx = Math.cos(a), dy = Math.sin(a) * 0.6;
+          g.strokeStyle = `rgba(255,255,255,${Math.min(0.5, 0.3 + (spdF - 10) * 0.2 / 14)})`;
+          g.lineWidth = 1 + Math.random() * 1.5;
+          g.beginPath();
+          g.moveTo(pScrX + dx * r1, pScrY + dy * r1);
+          g.lineTo(pScrX + dx * r2, pScrY + dy * r2);
+          g.stroke();
+        }
+      }
+
+
+      // === 5. RENDER BOBSLED TEAM ===
+      let pp = project(pX, pY, pZ);
+      if (pp.z > 0.3) {
+        pScrX = pp.x; pScrY = pp.y;
+        let pSc = pScrSc = 18 / pp.z;
+        let ph = pZ * 4;
+        // Dog lateral offset from steering (smoothed)
+        // Lead dogs — swing out wider on turns
+        let lXw = pX + dogTurn * 1.2;
+        let lp = project(lXw, getHeight(lXw, pZ + 2), pZ + 2);
+        let lS = 27 / lp.z;
+        // Wheel dogs — moderate swing
+        let wXw = pX + dogTurn * 0.5;
+        let wp = project(wXw, getHeight(wXw, pZ + 1), pZ + 1);
+        let wS = 27 / wp.z;
+        // Dog screen positions (tighter spread)
+        let ldLx = lp.x - 8 * lS, ldRx = lp.x + 8 * lS;
+        let wdLx = wp.x - 6 * wS, wdRx = wp.x + 6 * wS;
+        // Draw far to near: lead, wheel, harness, sled
+        drawDog(ldLx, lp.y, lS, ph);
+        drawDog(ldRx, lp.y, lS, ph + PI * .5);
+        drawDog(wdLx, wp.y, wS, ph + PI);
+        drawDog(wdRx, wp.y, wS, ph + PI * 1.5);
+        // Harness: lead dogs to wheel dogs
+        g.strokeStyle = '#654'; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(ldLx, lp.y - 5 * lS); g.lineTo(wdLx, wp.y - 5 * wS); g.stroke();
+        g.beginPath(); g.moveTo(ldRx, lp.y - 5 * lS); g.lineTo(wdRx, wp.y - 5 * wS); g.stroke();
+        // Harness: wheel dogs to sled
+        g.beginPath(); g.moveTo(wdLx, wp.y - 5 * wS); g.lineTo(pScrX - 3 * pSc, pScrY - 2 * pSc); g.stroke();
+        g.beginPath(); g.moveTo(wdRx, wp.y - 5 * wS); g.lineTo(pScrX + 3 * pSc, pScrY - 2 * pSc); g.stroke();
+        drawSled(pScrX, pScrY, pSc);
+      }
+
+      // Particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        let p = particles[i];
+        p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--;
+        g.fillStyle = `rgba(255,255,255,${p.life / p.ml})`;
+        g.fillRect(p.x, p.y, p.sz, p.sz);
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+    }
+
+    // CMU Scotty dog (side-profile, bouncing, turns with steering)
+    function drawDog(x, y, sc, ph) {
+      g.save(); g.translate(x, y); g.scale(sc, sc);
+      g.rotate(turnRate * 0.12);
+      let dir = turnRate > 0.1 ? 1 : turnRate < -0.1 ? -1 : 0;
+      // Bounce
+      let b = Math.abs(Math.sin(ph)) * 2;
+      let by = -b;
+      g.fillStyle = '#111';
+      // Body
+      g.fillRect(-3, by - 5, 7, 3);
+      // Head
+      let hx = dir;
+      g.fillRect(-2 + hx, by - 8, 5, 3);
+      // Snout
+      g.fillRect(2 + hx, by - 7, 2, 2);
+      // Ears
+      g.fillRect(-2 + hx, by - 10, 1, 2);
+      g.fillRect(2 + hx, by - 10, 1, 2);
+      // Legs (animated trot)
+      let la = Math.sin(ph);
+      g.fillRect(-2, by - 2, 1, 3 + la);
+      g.fillRect(2, by - 2, 1, 3 - la);
+      g.fillRect(-1, by - 2, 1, 2 - la);
+      g.fillRect(1, by - 2, 1, 2 + la);
+      // Tail (wagging)
+      let wag = Math.sin(ph * 1.3);
+      g.fillRect(-3 + wag, by - 7, 1, 2);
+      // Eyes
+      g.fillStyle = '#fff';
+      g.fillRect(hx, by - 7, 1, 1);
+      // Tartan scarf (red + green plaid)
+      for (let i = 0; i < 7; i++) {
+        g.fillStyle = (i % 2 == 0) ? '#bb0000' : '#006b00';
+        g.fillRect(-3 + i, by - 5, 1, 1);
+        g.fillStyle = (i % 2 == 0) ? '#006b00' : '#bb0000';
+        g.fillRect(-3 + i, by - 4, 1, 1);
+      }
+      g.restore();
+    }
+
+    // Bobsled + rider
+    function drawSled(x, y, sc) {
+      let lean = turnRate * 0.3;
+      g.save(); g.translate(x, y); g.scale(sc, sc); g.rotate(lean * 0.15);
+      // Shadow
+      g.fillStyle = 'rgba(0,0,0,0.15)';
+      g.beginPath(); g.ellipse(0, 11, 13, 3, 0, 0, PI * 2); g.fill();
+      // Runners
+      g.fillStyle = '#654321';
+      g.fillRect(-8, 7, 18, 1); g.fillRect(-8, 9, 18, 1);
+      // Sled body
+      g.fillStyle = '#8B4513'; g.fillRect(-7, 5, 14, 2);
+      // Curved front
+      g.fillRect(9, 6, 2, 1); g.fillRect(10, 5, 1, 1);
+      // Student body (dark jacket)
+      g.fillStyle = '#445'; g.fillRect(-3, -2, 6, 7);
+      // Scarf
+      g.fillStyle = '#c49102'; g.fillRect(-3, 0, 6, 1);
+      // Arms holding reins
+      g.fillStyle = '#445'; g.fillRect(-4, 0, 1, 3); g.fillRect(3, 0, 1, 3);
+      // Head
+      g.fillStyle = '#dba'; g.fillRect(-2, -5, 4, 3);
+      // Beanie
+      g.fillStyle = '#bb0000'; g.fillRect(-2, -7, 4, 2);
+      // Pom pom
+      g.fillStyle = '#fff'; g.fillRect(-1, -8, 2, 1);
+      g.restore();
+    }
+
+    function spraySnow() {
+      for (let i = 0; i < 3; i++) {
         particles.push({
-          x:pScrX+Math.random()*20-10,
-          y:pScrY+Math.random()*10-5,
-          vx:(Math.random()-0.5)*8,
-          vy:-Math.random()*6-2,
-          life:25+Math.random()*20|0,ml:45,
-          sz:2+Math.random()*4
+          x: pScrX + (turnRate > 0 ? 10 : -8) * pScrSc, y: pScrY + 9 * pScrSc,
+          vx: turnRate * 3 + Math.random() * 2 - 1,
+          vy: -Math.random() * 3 - 1,
+          life: 15 + Math.random() * 10 | 0, ml: 25,
+          sz: 2 + Math.random() * 3
         });
       }
-      // Save high score
-      let finalScore=Math.floor(score);
-      if(finalScore>hiScore){hiScore=finalScore;try{localStorage.setItem('hs',hiScore)}catch(e){}}
-      // Play crash sound
-      playBuf(sndCrash);
-      return;
     }
-  }
-}
 
-function update(dt){
-if(state!=1)return;
-if(dt>0.1)dt=0.1;
+    function ambientSnow() {
+      if (Math.random() < 0.3 + speed * 0.05) {
+        particles.push({
+          x: Math.random() * W, y: -5,
+          vx: turnRate * 0.5 + Math.random() - 0.5,
+          vy: 1 + Math.random() * 2 + speed * 0.3,
+          life: 60 + Math.random() * 40 | 0, ml: 100,
+          sz: 1 + Math.random() * 2
+        });
+      }
+    }
 
-// === 2. PLAYER POSITIONING: Snap to ground ===
-// Slope: negative=downhill (fast), positive=uphill (slow)
-slopeVal=getHeight(pX,pZ+2)-getHeight(pX,pZ-2);
-let slope=slopeVal<0?-slopeVal*0.12:-slopeVal*0.02;
+    // === OBSTACLE SYSTEM ===
+    // Procedural obstacle placement: uses world-coordinate seeded randomness
+    // so obstacles exist everywhere and are consistent no matter where you go
+    function seedRand(a, b) {
+      // Simple hash to get a deterministic 0-1 from two integers
+      let h = (a * 2654435761 ^ b * 2246822519) & 0x7fffffff;
+      return (h % 10000) / 10000;
+    }
 
-let tt=terrainType(Math.floor(pZ));
-let friction=tt==0?0.015:tt==1?0.025:tt==2?0.008:0.02;
-let gravity=9.8*slope;
-let turnDrag=Math.abs(turnRate)*0.03;
-let dragMult=inputTuck?0.6:1;
-let airDrag=speed*speed*0.001*dragMult;
+    function spawnObstacles() {
+      // Cell size in world units
+      let cellZ = 5, cellX = 6;
+      // Range around player to populate
+      let rangeX = 60; // far left/right of player
+      let rangeZbehind = 10, rangeZahead = 80;
 
-speed+=gravity*dt;
-speed-=(friction+turnDrag)*speed*dt;
-speed-=airDrag*dt;
-if(slopeVal>0)speed-=slopeVal*slopeVal*0.15*dt;
-speed=Math.max(7.5,Math.min(speed,30));
-accelVal=lerp(accelVal,Math.max(0,(speed-prevSpd)/dt),Math.min(1,dt*10));
-prevSpd=speed;
+      let minCZ = Math.floor((pZ - rangeZbehind) / cellZ);
+      let maxCZ = Math.floor((pZ + rangeZahead) / cellZ);
+      let minCX = Math.floor((pX - rangeX) / cellX);
+      let maxCX = Math.floor((pX + rangeX) / cellX);
 
-// Steering
-let curv=curvature(pZ)*0.002;
-turnRate+=(inputX*2.5-turnRate)*dt*6;
-pX+=turnRate*dt*4.0;
-pX+=curv*speed*dt*0.1;
+      for (let cz = minCZ; cz <= maxCZ; cz++) {
+        for (let cx = minCX; cx <= maxCX; cx++) {
+          // Unique key for this cell
+          let key = cz * 10000 + cx;
+          // Skip if already spawned
+          if (spawnedCells.has(key)) continue;
+          spawnedCells.add(key);
 
-// Move forward
-pZ+=speed*dt*0.5;
+          // Deterministic random for this cell
+          let r1 = seedRand(cz, cx);
+          let r2 = seedRand(cx * 37, cz * 73);
+          let r3 = seedRand(cz * 113, cx * 191);
 
-// Snap player Y to ground height
-pY=getHeight(pX,pZ);
+          // ~60% chance a cell has an obstacle (density increases over time)
+          let density = 0.55 + Math.min(0.25, pZ / 2000);
+          if (r1 > density) continue;
 
-// Score
-score+=speed*dt*2;
+          // Position within cell
+          let oz = cz * cellZ + r2 * cellZ;
+          let ox = cx * cellX + r3 * cellX;
 
-// === 3. CAMERA LOGIC: Spring arm with lerp ===
-smoothFov=lerp(smoothFov,0.65+slopeVal*0.07,Math.min(1,dt*3));
-let t=Math.min(1,dt*5);
-let dh=Math.min(2.5,Math.max(0,-slopeVal));
-// Camera X lags behind player so you can see side-to-side dodging
-camX=lerp(camX,pX,Math.min(1,dt*2.5));
-camY=lerp(camY,pY+2+dh*1.2,Math.min(1,dt*8));
-camZ=lerp(camZ,pZ-3-dh*0.6,t);
-// Camera yaw: look toward a point ahead of the player
-camAngle=Math.atan2(pX-camX,pZ+4-camZ);
+          // Don't spawn right on top of player start
+          if (oz < 20 && Math.abs(ox) < 8) continue;
 
-// Snow effects
-if(Math.abs(turnRate)>0.5&&speed>3){
-spraySnow();
-if(Math.random()<0.05)playBuf(sndCarve);
-}
-ambientSnow();
+          // Leave a safe corridor near the player's current path
+          // (only for obstacles at roughly the same Z)
+          let dzToPlayer = oz - pZ;
+          if (dzToPlayer > 5 && dzToPlayer < 20 && Math.abs(ox - pX) < 3) continue;
 
-// Shake decay
-shakeX*=0.85;shakeY*=0.85;
-if(Math.abs(shakeX)<0.5)shakeX=0;
-if(Math.abs(shakeY)<0.5)shakeY=0;
+          let type = r2 < 0.5 ? 0 : r2 < 0.8 ? 1 : 2;
+          obstacles.push({ x: ox, z: oz, type, hit: false });
+        }
+      }
+    }
 
-// Obstacles
-spawnObstacles();
-cleanupObstacles();
-checkCollisions();
-}
+    // Track which cells we've already generated
+    let spawnedCells = new Set();
 
-function drawHUD(){
-if(state!=1)return;
-let fs=Math.max(14,W*0.04|0);
-g.textAlign='left';
-g.font='bold '+fs+'px monospace';
-g.fillStyle='#fff';
-g.fillText('Score: '+Math.floor(score),10,fs+5);
-g.fillText('Speed: '+speed.toFixed(1),10,fs*2+10);
-if(combo>1){
-g.fillStyle='#ff0';
-g.fillText('Combo x'+combo+'!',10,fs*3+15);
-}
-// Elevation indicator (right side)
-g.save();
-g.translate(W-45,fs*1.5);
-let sa=Math.atan2(slopeVal,4);
-g.rotate(sa);
-g.fillStyle=slopeVal<-0.3?'#4f8':slopeVal>0.3?'#f84':'#aaa';
-g.beginPath();g.moveTo(18,0);g.lineTo(-8,-7);g.lineTo(-4,0);g.lineTo(-8,7);
-g.closePath();g.fill();
-g.restore();
-g.textAlign='right';
-g.fillStyle='#ccc';
-g.font=Math.max(11,W*0.03|0)+'px monospace';
-g.fillText((2000+Math.floor(pY*10))+'m',W-10,fs*3);
-}
+    function cleanupObstacles() {
+      let cellZ = 5, cellX = 6;
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        let ob = obstacles[i];
+        // Remove if far behind or far to the side
+        if (ob.z < pZ - 25 || Math.abs(ob.x - pX) > 80) {
+          // Also remove the cell key so it can respawn if we come back (won't happen in practice)
+          let cz = Math.floor(ob.z / cellZ);
+          let cx = Math.floor(ob.x / cellX);
+          spawnedCells.delete(cz * 10000 + cx);
+          obstacles.splice(i, 1);
+        }
+      }
+    }
 
-function drawTitle(){
-g.textAlign='center';
-g.fillStyle='#fff';
-g.font='bold '+Math.max(36,W*0.1|0)+'px monospace';
-g.fillText('INFINITE',W/2,H*0.28);
-g.fillText('SKI',W/2,H*0.38);
+    function drawTree(sx, sy, sc, type, fogT) {
+      // Fog blends colors toward sky
+      let skyR = 192, skyG = 221, skyB = 240;
+      function fogCol(r, gv, b) {
+        return `rgb(${(r * (1 - fogT) + skyR * fogT) | 0},${(gv * (1 - fogT) + skyG * fogT) | 0},${(b * (1 - fogT) + skyB * fogT) | 0})`;
+      }
+      if (type === 0) {
+        // Pine tree - triangle layers
+        let h = sc * 16;
+        let w = sc * 7.2;
+        // Trunk
+        g.fillStyle = fogCol(70, 45, 20);
+        g.fillRect(sx - sc * 0.2, sy - h * 0.15, sc * 0.4, h * 0.2);
+        // Tree layers (bottom to top)
+        for (let i = 0; i < 3; i++) {
+          let ly = sy - h * 0.15 - h * i * 0.22;
+          let lw = w * (1 - i * 0.22);
+          // Dark green body
+          g.fillStyle = fogCol(20 + i * 8, 70 + i * 10, 30 + i * 5);
+          g.beginPath();
+          g.moveTo(sx - lw, ly);
+          g.lineTo(sx, ly - h * 0.32);
+          g.lineTo(sx + lw, ly);
+          g.closePath();
+          g.fill();
+        }
+        // Snow on branches
+        g.fillStyle = fogCol(230, 240, 245);
+        for (let i = 0; i < 3; i++) {
+          let ly = sy - h * 0.15 - h * i * 0.22;
+          let lw = w * (1 - i * 0.22) * 0.65;
+          g.beginPath();
+          g.moveTo(sx - lw, ly - h * 0.04);
+          g.lineTo(sx, ly - h * 0.32);
+          g.lineTo(sx + lw, ly - h * 0.04);
+          g.closePath();
+          g.fill();
+        }
+      } else if (type === 1) {
+        // Rock
+        let sz = sc * 6.4;
+        g.fillStyle = fogCol(85, 90, 105);
+        g.beginPath();
+        g.moveTo(sx - sz, sy);
+        g.lineTo(sx - sz * 0.7, sy - sz * 1.1);
+        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
+        g.lineTo(sx + sz, sy - sz * 0.7);
+        g.lineTo(sx + sz * 0.8, sy);
+        g.closePath();
+        g.fill();
+        // Highlight
+        g.fillStyle = fogCol(120, 125, 140);
+        g.beginPath();
+        g.moveTo(sx - sz * 0.6, sy - sz * 0.6);
+        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
+        g.lineTo(sx + sz * 0.7, sy - sz * 0.8);
+        g.closePath();
+        g.fill();
+        // Snow cap
+        g.fillStyle = fogCol(210, 220, 230);
+        g.beginPath();
+        g.moveTo(sx - sz * 0.4, sy - sz * 0.95);
+        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
+        g.lineTo(sx + sz * 0.65, sy - sz * 0.8);
+        g.closePath();
+        g.fill();
+      } else {
+        // Bare tree / dead tree
+        let h = sc * 14;
+        g.strokeStyle = fogCol(60, 42, 25);
+        g.lineWidth = Math.max(1.5, sc * 1);
+        // Trunk
+        g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx, sy - h); g.stroke();
+        // Branches
+        g.lineWidth = Math.max(1, sc * 0.6);
+        g.beginPath(); g.moveTo(sx, sy - h * 0.45); g.lineTo(sx - sc * 5.2, sy - h * 0.65); g.stroke();
+        g.beginPath(); g.moveTo(sx, sy - h * 0.58); g.lineTo(sx + sc * 6, sy - h * 0.78); g.stroke();
+        g.beginPath(); g.moveTo(sx, sy - h * 0.72); g.lineTo(sx - sc * 3.2, sy - h * 0.92); g.stroke();
+        g.beginPath(); g.moveTo(sx, sy - h * 0.85); g.lineTo(sx + sc * 2.4, sy - h * 0.98); g.stroke();
+      }
+    }
 
-g.font=Math.max(14,W*0.04|0)+'px monospace';
-g.fillStyle='rgba(255,255,255,0.7)';
-g.fillText('Dodge trees, hit gates, go fast!',W/2,H*0.48);
+    function renderObstacles() {
+      let visible = [];
+      for (let i = 0; i < obstacles.length; i++) {
+        let ob = obstacles[i];
+        let wy = getHeight(ob.x, ob.z);
+        let p = project(ob.x, wy, ob.z);
+        if (p.z < 0.5 || p.z > 45 || p.x < -200 || p.x > W + 200) continue;
 
-if(Date.now()%1000<600){
-g.fillStyle='#fff';
-g.font='bold '+Math.max(18,W*0.05|0)+'px monospace';
-g.fillText('TAP TO START',W/2,H*0.62);
-}
+        // World-space ray occlusion: find the most blocking terrain between camera and obstacle
+        let maxExcess = 0;
+        let bestT = 0;
+        for (let s = 1; s < 12; s++) {
+          let t = s / 12;
+          let sx = camX + (ob.x - camX) * t;
+          let sz = camZ + (ob.z - camZ) * t;
+          let losY = camY + (wy - camY) * t;
+          let terrainH = getHeight(sx, sz);
+          let excess = terrainH - losY;
+          if (excess > maxExcess) { maxExcess = excess; bestT = t; }
+        }
 
-if(hiScore>0){
-g.fillStyle='#ff0';
-g.font=Math.max(14,W*0.04|0)+'px monospace';
-g.fillText('Best: '+hiScore,W/2,H*0.72);
-}
+        // Store crest info for curved clip (very low threshold for smooth transition)
+        let crest = null;
+        if (maxExcess > 0) {
+          crest = {
+            x: camX + (ob.x - camX) * bestT,
+            z: camZ + (ob.z - camZ) * bestT
+          };
+        }
 
-g.fillStyle='rgba(255,255,255,0.5)';
-g.font=Math.max(11,W*0.03|0)+'px monospace';
-g.fillText('Touch sides to steer | Bottom = tuck',W/2,H*0.82);
-g.fillText('Arrow keys / mouse on desktop',W/2,H*0.87);
-}
+        // Ground snap
+        let col = Math.round(Math.max(0, Math.min(W - 1, p.x)));
+        let baseY = p.y;
+        if (p.y < terrainSil[col]) baseY = terrainSil[col];
 
-function drawGameOver(){
-g.textAlign='center';
-g.fillStyle='rgba(0,0,0,0.5)';
-g.fillRect(0,H*0.2,W,H*0.6);
-g.fillStyle='#f44';
-g.font='bold '+Math.max(32,W*0.09|0)+'px monospace';
-g.fillText('CRASHED!',W/2,H*0.35);
-g.fillStyle='#fff';
-g.font=Math.max(18,W*0.05|0)+'px monospace';
-g.fillText('Score: '+Math.floor(score),W/2,H*0.47);
-g.fillText('Distance: '+Math.floor(pZ)+'m',W/2,H*0.54);
-if(maxCombo>1)g.fillText('Max Combo: x'+maxCombo,W/2,H*0.61);
-if(Math.floor(score)>=hiScore&&hiScore>0){
-g.fillStyle='#ff0';
-g.fillText('NEW HIGH SCORE!',W/2,H*0.68);
-}
-if(Date.now()%1000<600){
-g.fillStyle='#fff';
-g.font='bold '+Math.max(16,W*0.045|0)+'px monospace';
-g.fillText('TAP TO RETRY',W/2,H*0.78);
-}
-}
+        visible.push({ ob, p, wy, crest, baseY });
+      }
+      visible.sort((a, b) => b.p.z - a.p.z);
+      for (let i = 0; i < visible.length; i++) {
+        let { ob, p, wy, crest, baseY } = visible[i];
+        let sc = 80 / p.z;
+        let fogT = Math.min(1, p.z * p.z * 0.0004);
 
-function resetGame(){
-pX=0;pZ=0;
-for(let z=0;z<200;z++){if(getHeight(0,z+2)-getHeight(0,z-2)<-0.3){pZ=z;break;}}
-pY=getHeight(0,pZ);
-speed=7.5;turnRate=0;
-camX=0;camY=pY+2;camZ=pZ-3;camAngle=0;
-score=0;combo=1;maxCombo=1;crashed=0;crashTimer=0;
-particles=[];shakeX=0;shakeY=0;prevSpd=7.5;accelVal=0;smoothFov=0.65;
-obstacles=[];lastSpawnZ=0;spawnedCells=new Set();
-}
+        g.save();
+        if (crest) {
+          // Curved clip following the crest terrain profile
+          // Sample terrain heights across the crest at the blocking Z
+          let span = 12; // world units to sample across
+          let ns = 10;
+          g.beginPath();
+          // Top-left corner (visible region above crest)
+          let firstX = crest.x - span;
+          let fp = project(firstX, getHeight(firstX, crest.z), crest.z);
+          g.moveTo(fp.x, 0);
+          // Top-right corner
+          let lastX = crest.x + span;
+          let lp = project(lastX, getHeight(lastX, crest.z), crest.z);
+          g.lineTo(lp.x, 0);
+          // Follow crest curve right to left
+          for (let j = ns; j >= 0; j--) {
+            let wx = crest.x + (j / ns - 0.5) * span * 2;
+            let h = getHeight(wx, crest.z);
+            let cp = project(wx, h, crest.z);
+            g.lineTo(cp.x, cp.y);
+          }
+          g.closePath();
+          g.clip();
+        }
 
-let keys={};
-let mouseDown=0,mouseX=0,mouseY=0;
-onkeydown=e=>{keys[e.key]=1;if(state!=1)startOrRetry()};
-onkeyup=e=>{keys[e.key]=0};
+        // Shadow on ground
+        g.fillStyle = `rgba(0,0,0,${0.15 * (1 - fogT)})`;
+        let shSz = sc * 0.8;
+        g.beginPath(); g.ellipse(p.x, baseY + shSz * 0.15, shSz * 1.2, shSz * 0.25, 0, 0, PI * 2); g.fill();
+        drawTree(p.x, baseY, sc, ob.type, fogT);
+        g.restore();
+      }
+    }
 
-function handlePointer(e){
-e.preventDefault();
-let t=e.touches?e.touches[0]:e;
-mouseX=t.clientX;mouseY=t.clientY;
-mouseDown=1;
-}
-c.addEventListener('touchstart',e=>{initAudio();handlePointer(e);if(state!=1)startOrRetry()},{passive:false});
-c.addEventListener('touchmove',e=>{handlePointer(e)},{passive:false});
-c.addEventListener('touchend',e=>{e.preventDefault();mouseDown=0},{passive:false});
-c.addEventListener('mousedown',e=>{initAudio();mouseDown=1;mouseX=e.clientX;mouseY=e.clientY;if(state!=1)startOrRetry()});
-c.addEventListener('mousemove',e=>{if(mouseDown){mouseX=e.clientX;mouseY=e.clientY}});
-c.addEventListener('mouseup',()=>{mouseDown=0});
+    function checkCollisions() {
+      // Only the rider triggers a crash - rider sits at pX, pZ
+      // Rider body is narrow (~0.6 world units wide)
+      let hitRadiusX = 0.7;
+      let hitRadiusZ = 1.0;
+      for (let i = 0; i < obstacles.length; i++) {
+        let ob = obstacles[i];
+        if (ob.hit) continue;
+        let dz = ob.z - pZ;
+        let dx = ob.x - pX;
+        if (Math.abs(dz) < hitRadiusZ && Math.abs(dx) < hitRadiusX) {
+          ob.hit = true;
+          // CRASH!
+          crashed = 1;
+          state = 2;
+          crashTimer = 1.5;
+          // Screen shake
+          shakeX = (Math.random() - 0.5) * 20;
+          shakeY = (Math.random() - 0.5) * 15;
+          // Crash particles
+          for (let j = 0; j < 25; j++) {
+            particles.push({
+              x: pScrX + Math.random() * 20 - 10,
+              y: pScrY + Math.random() * 10 - 5,
+              vx: (Math.random() - 0.5) * 8,
+              vy: -Math.random() * 6 - 2,
+              life: 25 + Math.random() * 20 | 0, ml: 45,
+              sz: 2 + Math.random() * 4
+            });
+          }
+          // Save high score
+          let finalScore = Math.floor(score);
+          if (finalScore > hiScore) { hiScore = finalScore; try { localStorage.setItem('hs', hiScore) } catch (e) { } }
+          return;
+        }
+      }
+    }
 
-function startOrRetry(){
-if(state==0){state=1;resetGame()}
-else if(state==2&&crashTimer<=0){state=0}
-}
+    function update(dt) {
+      if (state != 1) return;
+      if (dt > 0.1) dt = 0.1;
 
-function processInput(){
-inputX=0;inputTuck=0;
-if(keys['ArrowLeft']||keys['a'])inputX=-1;
-if(keys['ArrowRight']||keys['d'])inputX=1;
-if(keys['ArrowDown']||keys['s'])inputTuck=1;
-if(mouseDown){
-let rx=(mouseX-W/2)/(W/2);
-inputX=Math.max(-1,Math.min(1,rx*1.5));
-if(mouseY>H*0.7)inputTuck=1;
-}
-}
+      // === 2. PLAYER POSITIONING: Snap to ground ===
+      // Slope: negative=downhill (fast), positive=uphill (slow)
+      slopeVal = getHeight(pX, pZ + 2) - getHeight(pX, pZ - 2);
+      let slope = slopeVal < 0 ? -slopeVal * 0.12 : -slopeVal * 0.02;
 
-function frame(t){
-let dt=(t-lastTime)/1000;
-lastTime=t;
-if(dt>0.2)dt=0.016;
+      let tt = terrainType(Math.floor(pZ));
+      let friction = tt == 0 ? 0.015 : tt == 1 ? 0.025 : tt == 2 ? 0.008 : 0.02;
+      let gravity = 9.8 * slope;
+      let turnDrag = Math.abs(turnRate) * 0.1;
+      let dragMult = inputTuck ? 0.6 : 1;
+      let airDrag = speed * speed * 0.001 * dragMult;
 
-processInput();
-if(state==1)update(dt);
-if(state==2){crashTimer-=dt;shakeX*=0.9;shakeY*=0.9}
+      speed += gravity * dt;
+      speed -= (friction + turnDrag) * speed * dt;
+      speed -= airDrag * dt;
+      if (slopeVal > 0) speed -= slopeVal * slopeVal * 0.15 * dt;
+      speed = Math.max(7.5, Math.min(speed, 30));
+      accelVal = lerp(accelVal, Math.max(0, (speed - prevSpd) / dt), Math.min(1, dt * 10));
+      prevSpd = speed;
 
-render();
-drawHUD();
-if(state==0)drawTitle();
-if(state==2)drawGameOver();
+      // Steering
+      let curv = curvature(pZ) * 0.002;
+      turnRate += (inputX * 2.5 - turnRate) * dt * .6;
+      pX += dogTurn * dt * 4.0;
+      pX += curv * speed * dt * 0.1;
 
-requestAnimationFrame(frame);
-}
+      // Move forward
+      pZ += speed * dt * 0.5;
 
-// Initialize on downhill
-for(let z=0;z<200;z++){if(getHeight(0,z+2)-getHeight(0,z-2)<-0.3){pZ=z;break;}}
-pY=getHeight(0,pZ);
-camY=pY+2;camZ=pZ-3;
-lastTime=performance.now();
-requestAnimationFrame(frame);
-</script></body></html>
+      // Snap player Y to ground height
+      pY = getHeight(pX, pZ);
+
+      // Score
+      score += speed * dt * 2;
+
+      // === 3. CAMERA LOGIC: Spring arm with lerp ===
+      smoothFov = lerp(smoothFov, 0.65 + slopeVal * 0.07, Math.min(1, dt * 3));
+      let t = Math.min(1, dt * 5);
+      let dh = Math.min(2.5, Math.max(0, -slopeVal));
+      // Camera X lags behind player so you can see side-to-side dodging
+      camX = lerp(camX, pX, Math.min(1, dt * 2.5));
+      camY = lerp(camY, pY + 2 + dh * 1.2, Math.min(1, dt * 8));
+      camZ = lerp(camZ, pZ - 3 - dh * 0.6, t);
+      // Camera yaw: look toward a point ahead of the player
+      camAngle = Math.atan2(pX - camX, pZ + 4 - camZ);
+
+      // Snow effects
+      if (Math.abs(turnRate) > 0.5 && speed > 3) {
+        spraySnow();
+      }
+      ambientSnow();
+
+      // Smooth dog turn (lags behind turnRate for natural feel)
+      dogTurn = lerp(dogTurn, turnRate, Math.min(1, dt * 2));
+
+      // Shake decay
+      shakeX *= 0.85; shakeY *= 0.85;
+      if (Math.abs(shakeX) < 0.5) shakeX = 0;
+      if (Math.abs(shakeY) < 0.5) shakeY = 0;
+
+      // Obstacles
+      spawnObstacles();
+      cleanupObstacles();
+      checkCollisions();
+    }
+
+    function drawHUD() {
+      if (state != 1) return;
+      let fs = Math.max(14, W * 0.04 | 0);
+      g.textAlign = 'left';
+      g.font = 'bold ' + fs + 'px monospace';
+      g.fillStyle = '#fff';
+      g.fillText('Score: ' + Math.floor(score), 10, fs + 5);
+      g.fillText('Speed: ' + speed.toFixed(1), 10, fs * 2 + 10);
+      if (combo > 1) {
+        g.fillStyle = '#ff0';
+        g.fillText('Combo x' + combo + '!', 10, fs * 3 + 15);
+      }
+      // 2D elevation minimap (top-right)
+      let mapSz = Math.max(80, W * 0.12 | 0);
+      let mapX = W - mapSz - 10, mapY = 10;
+      let mapRes = 2; // pixel step
+      let mapRange = 40; // world units around player
+      g.fillStyle = 'rgba(0,0,0,0.4)';
+      g.fillRect(mapX - 2, mapY - 2, mapSz + 4, mapSz + 4);
+      for (let py2 = 0; py2 < mapSz; py2 += mapRes) {
+        for (let px2 = 0; px2 < mapSz; px2 += mapRes) {
+          let wx = pX + (px2 - mapSz / 2) / mapSz * mapRange;
+          let wz = pZ + (mapSz / 2 - py2) / mapSz * mapRange;
+          let h = getHeight(wx, wz);
+          let rel = (h - pY + 10) / 20;
+          rel = Math.max(0, Math.min(1, rel));
+          // Low=green(downhill), mid=white(snow), high=brown(uphill)
+          let r, gv, b;
+          if (rel < 0.5) { let t = rel * 2; r = 70 + t * 185; gv = 160 + t * 95; b = 70 + t * 185; }
+          else { let t = (rel - 0.5) * 2; r = 255 - t * 115; gv = 255 - t * 135; b = 255 - t * 175; }
+          g.fillStyle = `rgb(${r | 0},${gv | 0},${b | 0})`;
+          g.fillRect(mapX + px2, mapY + py2, mapRes, mapRes);
+        }
+      }
+      // Player dot
+      g.fillStyle = '#f00';
+      g.beginPath(); g.arc(mapX + mapSz / 2, mapY + mapSz / 2, 3, 0, PI * 2); g.fill();
+      // Direction indicator
+      g.strokeStyle = '#f00'; g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(mapX + mapSz / 2, mapY + mapSz / 2);
+      g.lineTo(mapX + mapSz / 2 + Math.sin(camAngle) * 8, mapY + mapSz / 2 - Math.cos(camAngle) * 8);
+      g.stroke();
+      // Elevation label
+      g.textAlign = 'right';
+      g.fillStyle = '#ccc';
+      g.font = Math.max(11, W * 0.03 | 0) + 'px monospace';
+      g.fillText((2000 + Math.floor(pY * 10)) + 'm', W - 10, mapY + mapSz + 16);
+    }
+
+    function drawTitle() {
+      g.textAlign = 'center';
+      g.fillStyle = '#fff';
+      g.font = 'bold ' + Math.max(36, W * 0.1 | 0) + 'px monospace';
+      g.fillText('STRANDED', W / 2, H * 0.28);
+      g.fillText('at Seven Springs', W / 2, H * 0.38);
+
+      g.font = Math.max(14, W * 0.04 | 0) + 'px monospace';
+      g.fillStyle = 'rgba(255,255,255,0.7)';
+      g.fillText('Don\'t be late for class!', W / 2, H * 0.48);
+
+      if (Date.now() % 1000 < 600) {
+        g.fillStyle = '#fff';
+        g.font = 'bold ' + Math.max(18, W * 0.05 | 0) + 'px monospace';
+        g.fillText('TAP TO START', W / 2, H * 0.62);
+      }
+
+      if (hiScore > 0) {
+        g.fillStyle = '#ff0';
+        g.font = Math.max(14, W * 0.04 | 0) + 'px monospace';
+        g.fillText('Best: ' + hiScore, W / 2, H * 0.72);
+      }
+
+      g.fillStyle = 'rgba(255,255,255,0.5)';
+      g.font = Math.max(11, W * 0.03 | 0) + 'px monospace';
+      g.fillText('Touch sides to steer | Bottom = tuck', W / 2, H * 0.82);
+      g.fillText('Arrow keys / mouse on desktop', W / 2, H * 0.87);
+    }
+
+    function drawGameOver() {
+      g.textAlign = 'center';
+      g.fillStyle = 'rgba(0,0,0,0.5)';
+      g.fillRect(0, H * 0.2, W, H * 0.6);
+      g.fillStyle = '#f44';
+      g.font = 'bold ' + Math.max(32, W * 0.09 | 0) + 'px monospace';
+      g.fillText('CRASHED!', W / 2, H * 0.35);
+      g.fillStyle = '#fff';
+      g.font = Math.max(18, W * 0.05 | 0) + 'px monospace';
+      g.fillText('Score: ' + Math.floor(score), W / 2, H * 0.47);
+      g.fillText('Distance: ' + Math.floor(pZ) + 'm', W / 2, H * 0.54);
+      if (maxCombo > 1) g.fillText('Max Combo: x' + maxCombo, W / 2, H * 0.61);
+      if (Math.floor(score) >= hiScore && hiScore > 0) {
+        g.fillStyle = '#ff0';
+        g.fillText('NEW HIGH SCORE!', W / 2, H * 0.68);
+      }
+      if (Date.now() % 1000 < 600) {
+        g.fillStyle = '#fff';
+        g.font = 'bold ' + Math.max(16, W * 0.045 | 0) + 'px monospace';
+        g.fillText('TAP TO RETRY', W / 2, H * 0.78);
+      }
+    }
+
+    function resetGame() {
+      pX = 0; pZ = 0;
+      for (let z = 0; z < 200; z++) { if (getHeight(0, z + 2) - getHeight(0, z - 2) < -0.3) { pZ = z; break; } }
+      pY = getHeight(0, pZ);
+      speed = 7.5; turnRate = 0;
+      camX = 0; camY = pY + 2; camZ = pZ - 3; camAngle = 0;
+      score = 0; combo = 1; maxCombo = 1; crashed = 0; crashTimer = 0;
+      particles = []; shakeX = 0; shakeY = 0; prevSpd = 7.5; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
+      obstacles = []; lastSpawnZ = 0; spawnedCells = new Set();
+    }
+
+    let keys = {};
+    let mouseDown = 0, mouseX = 0, mouseY = 0;
+    onkeydown = e => { keys[e.key] = 1; if (state != 1) startOrRetry() };
+    onkeyup = e => { keys[e.key] = 0 };
+
+    function handlePointer(e) {
+      e.preventDefault();
+      let t = e.touches ? e.touches[0] : e;
+      mouseX = t.clientX; mouseY = t.clientY;
+      mouseDown = 1;
+    }
+    c.addEventListener('touchstart', e => { handlePointer(e); if (state != 1) startOrRetry() }, { passive: false });
+    c.addEventListener('touchmove', e => { handlePointer(e) }, { passive: false });
+    c.addEventListener('touchend', e => { e.preventDefault(); mouseDown = 0 }, { passive: false });
+    c.addEventListener('mousedown', e => { mouseDown = 1; mouseX = e.clientX; mouseY = e.clientY; if (state != 1) startOrRetry() });
+    c.addEventListener('mousemove', e => { if (mouseDown) { mouseX = e.clientX; mouseY = e.clientY } });
+    c.addEventListener('mouseup', () => { mouseDown = 0 });
+
+    function startOrRetry() {
+      if (state == 0) { state = 1; resetGame() }
+      else if (state == 2 && crashTimer <= 0) { state = 0 }
+    }
+
+    function processInput() {
+      inputX = 0; inputTuck = 0;
+      if (keys['ArrowLeft'] || keys['a']) inputX = -1;
+      if (keys['ArrowRight'] || keys['d']) inputX = 1;
+      if (keys['ArrowDown'] || keys['s']) inputTuck = 1;
+      if (mouseDown) {
+        let rx = (mouseX - W / 2) / (W / 2);
+        inputX = Math.max(-1, Math.min(1, rx * 1.5));
+        if (mouseY > H * 0.7) inputTuck = 1;
+      }
+    }
+
+    function frame(t) {
+      let dt = (t - lastTime) / 1000;
+      lastTime = t;
+      if (dt > 0.2) dt = 0.016;
+
+      processInput();
+      if (state == 1) update(dt);
+      if (state == 2) { crashTimer -= dt; shakeX *= 0.9; shakeY *= 0.9 }
+
+      render();
+      drawHUD();
+      if (state == 0) drawTitle();
+      if (state == 2) drawGameOver();
+
+      requestAnimationFrame(frame);
+    }
+
+    // Initialize on downhill
+    for (let z = 0; z < 200; z++) { if (getHeight(0, z + 2) - getHeight(0, z - 2) < -0.3) { pZ = z; break; } }
+    pY = getHeight(0, pZ);
+    camY = pY + 2; camZ = pZ - 3;
+    lastTime = performance.now();
+    requestAnimationFrame(frame);
+  </script>
+</body>
+
+</html>
