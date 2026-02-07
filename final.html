@@ -253,6 +253,14 @@
       drawMtn(H * 0.38, 65, 3.1, mc(...m2), -px * 0.7 + fz * 1, mc(...s2), .25);
       drawMtn(H * 0.45, 50, 5.3, mc(...m3), -px * 1.2 + fz * 1.5);
 
+      // Title "DASH" — in front of mountains, behind terrain
+      if (state == 0) {
+        g.textAlign = 'center';
+        g.font = 'bold ' + Math.max(50, W * 0.15 | 0) + 'px monospace';
+        g.fillStyle = 'rgb(255, 100, 0)';
+        snowText('DASH', W / 2, H * 0.38);
+      }
+
       // 3D column raycaster terrain
       renderTerrain();
 
@@ -832,8 +840,8 @@
             });
           }
           // Save high score
-          let finalScore = Math.floor(score);
-          if (finalScore > hiScore) { hiScore = finalScore; try { localStorage.setItem('hs', hiScore) } catch (e) { } }
+          let finalDist = Math.floor(pZ);
+          if (finalDist > hiScore) { hiScore = finalDist; try { localStorage.setItem('hs', hiScore) } catch (e) { } }
           return;
         }
       }
@@ -925,67 +933,49 @@
       checkCollisions();
     }
 
+    // Snowy text: white fill with icy blue shadow
+    function snowText(txt, x, y) {
+      g.shadowColor = 'rgba(150,200,255,0.7)';
+      g.shadowBlur = 6;
+      g.strokeStyle = 'rgba(180,220,255,0.5)';
+      g.lineWidth = 2;
+      g.strokeText(txt, x, y);
+      g.fillText(txt, x, y);
+      g.shadowBlur = 0;
+    }
+
     function drawHUD() {
       if (state != 1) return;
       let fs = Math.max(14, W * 0.04 | 0);
       g.textAlign = 'left';
       g.font = 'bold ' + fs + 'px monospace';
       g.fillStyle = '#fff';
-      g.fillText('Score: ' + Math.floor(score), 10, fs + 5);
-      g.fillText('Speed: ' + speed.toFixed(1), 10, fs * 2 + 10);
-      if (combo > 1) {
-        g.fillStyle = '#ff0';
-        g.fillText('Combo x' + combo + '!', 10, fs * 3 + 15);
-      }
+      snowText(Math.floor(pZ) + 'm', 10, fs + 5);
+      snowText(speed.toFixed(1) + ' mph', 10, fs * 2 + 10);
     }
 
     function drawTitle() {
       g.textAlign = 'center';
-      // Draw "Scotty's" first (background layer)
-      g.font='bold '+Math.max(36,W*0.1|0)+'px monospace'; // Original font for Scotty's
-      g.fillStyle='rgb(255, 255, 200)'; // Light yellow for Scotty's
-      g.fillText("Scotty's",W/2, H*0.24); // Position more to the left and higher
+      g.font = 'bold ' + Math.max(36, W * 0.1 | 0) + 'px monospace';
+      g.fillStyle = 'rgb(255, 255, 200)';
+      snowText("Scotty's", W / 2, H * 0.2);
 
-      // Draw "DASH" second (foreground layer), slightly lower and to the right
-      g.font='bold '+Math.max(50,W*0.15|0)+'px monospace'; // Larger font for DASH
-      g.fillStyle='rgb(255, 100, 0)'; // Sunset color for DASH
-      g.fillText('DASH', W/2,H*0.42); // Position lower and more to the right
-
-      /*
-      // Left side: "Don't be late to class"
-      g.save(); // Save current canvas state
-      g.translate(W * 0.15, H *0.6); // Move origin to desired text center
-      g.rotate(-Math.PI / 6); // Rotate 90 degrees counter-clockwise
-      g.textAlign='center'; // Center text on the new origin
-      g.fillStyle='rgb(255, 255, 0)'; // Yellow color
-      g.font='bold '+Math.max(10, W * 0.025 | 0)+'px monospace'; // Small font
-      let message1 = "Don't be late";
-      let message2 = "to class!";
-      let lineHeight = Math.max(10, W * 0.025 | 0) * 1.2; // Approximate line height based on font size
-
-      // Draw first line
-      g.fillText(message1, 0, -lineHeight / 2); // Center message1 slightly above origin
-      // Draw second line
-      g.fillText(message2, 0, lineHeight /  2); // Center message2 slightly below origin
-      g.restore(); // Restore canvas state
-      */
-
-      if (Date.now() % 1000 < 600) { 
+      if (Date.now() % 1000 < 600) {
         g.fillStyle = '#fff';
         g.font = 'bold ' + Math.max(18, W * 0.05 | 0) + 'px monospace';
-        g.fillText('TAP TO START', W / 2, H * 0.62);
+        snowText('TAP TO START', W / 2, H * 0.62);
       }
 
       if (hiScore > 0) {
         g.fillStyle = '#ff0';
         g.font = Math.max(14, W * 0.04 | 0) + 'px monospace';
-        g.fillText('Best: ' + hiScore, W / 2, H * 0.72);
+        snowText('Best: ' + hiScore + 'm', W / 2, H * 0.72);
       }
 
       g.fillStyle = 'rgba(255,230,190,0.5)';
       g.font = Math.max(11, W * 0.03 | 0) + 'px monospace';
-      g.fillText('Touch sides to steer', W / 2, H * 0.82);
-      g.fillText('Arrow keys / mouse on desktop', W / 2, H * 0.87);
+      snowText('Touch sides to steer', W / 2, H * 0.82);
+      snowText('Arrow keys / mouse on desktop', W / 2, H * 0.87);
     }
 
     function drawGameOver() {
@@ -994,20 +984,18 @@
       g.fillRect(0, H * 0.2, W, H * 0.6);
       g.fillStyle = '#f44';
       g.font = 'bold ' + Math.max(32, W * 0.09 | 0) + 'px monospace';
-      g.fillText('CRASHED!', W / 2, H * 0.35);
+      snowText('CRASHED!', W / 2, H * 0.35);
       g.fillStyle = '#fff';
       g.font = Math.max(15, W * 0.05 | 0) + 'px monospace';
-      g.fillText('Score: ' + Math.floor(score), W / 2, H * 0.44);
-      g.fillText('Distance: ' + Math.floor(pZ) + 'm', W / 2, H * 0.52);
-      if (maxCombo > 1) g.fillText('Max Combo: x' + maxCombo, W / 2, H * 0.61);
-      if (Math.floor(score) >= hiScore && hiScore > 0) {
+      snowText('Distance: ' + Math.floor(pZ) + 'm', W / 2, H * 0.47);
+      if (Math.floor(pZ) >= hiScore && hiScore > 0) {
         g.fillStyle = '#ff0';
-        g.fillText('NEW HIGH SCORE!', W / 2, H * 0.68);
+        snowText('NEW RECORD!', W / 2, H * 0.56);
       }
       if (Date.now() % 1000 < 600) {
         g.fillStyle = '#fff';
         g.font = 'bold ' + Math.max(16, W * 0.045 | 0) + 'px monospace';
-        g.fillText('TAP TO RETRY', W / 2, H * 0.78);
+        snowText('TAP TO RETRY', W / 2, H * 0.68);
       }
     }
 
@@ -1018,7 +1006,7 @@
       speed = 0; turnRate = 0;
       camX = 0; camY = pY + 2; camZ = pZ - 3; camAngle = 0;
       score = 0; combo = 1; maxCombo = 1; crashed = 0; crashTimer = 0;
-      particles = []; shakeX = 0; shakeY = 0; prevSpd = 14; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
+      particles = []; trailHist = []; shakeX = 0; shakeY = 0; prevSpd = 14; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
       obstacles = []; lastSpawnZ = 0; spawnedCells = new Set(); dayT = 0;
     }
 
