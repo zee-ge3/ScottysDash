@@ -639,7 +639,7 @@
       let tt = terrainType(Math.floor(pZ));
       let friction = tt == 0 ? 0.015 : tt == 1 ? 0.025 : tt == 2 ? 0.008 : 0.02;
       let gravity = 9.8 * slope;
-      let turnDrag = Math.abs(turnRate) * 0.03;
+      let turnDrag = Math.abs(turnRate) * 0.1;
       let dragMult = inputTuck ? 0.6 : 1;
       let airDrag = speed * speed * 0.001 * dragMult;
 
@@ -684,7 +684,7 @@
       ambientSnow();
 
       // Smooth dog turn (lags behind turnRate for natural feel)
-      dogTurn = lerp(dogTurn, turnRate, Math.min(1, dt * 1.5));
+      dogTurn = lerp(dogTurn, turnRate, Math.min(1, dt * 2));
 
       // Shake decay
       shakeX *= 0.85; shakeY *= 0.85;
