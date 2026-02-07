@@ -705,6 +705,16 @@
         sk.trail.unshift({ lx: sk.x - 0.15, lz: sk.z, rx: sk.x + 0.15, rz: sk.z });
         if (sk.trail.length > 80) sk.trail.length = 80;
         if (sk.z < pZ - 20 || Math.abs(sk.x - pX) > 60) { skiers.splice(i, 1); continue; }
+        // Remove skier if they clip into an obstacle
+        let clipped = false;
+        for (let j = 0; j < obstacles.length; j++) {
+          let ob = obstacles[j];
+          let s = ob.scale || 1;
+          let hx = ob.type === 1 ? 1.2 : ob.type === 3 ? 1.8 : ob.type === 4 ? 1.3 : ob.type === 5 ? 1.8 : ob.type === 6 ? 1.5 : 0.7;
+          let hz = ob.type === 3 ? 0.6 : ob.type === 5 ? 1.5 : ob.type === 6 ? 1.2 : 1.0;
+          if (Math.abs(sk.z - ob.z) < hz * s && Math.abs(sk.x - ob.x) < hx * s) { clipped = true; break; }
+        }
+        if (clipped) { skiers.splice(i, 1); continue; }
         // Collision
         if (!sk.hit && state === 1 && Math.abs(sk.z - pZ) < 0.7 && Math.abs(sk.x - pX) < 0.5) {
           sk.hit = true; crashed = 1; state = 2; crashTimer = 1.5; playCrashSfx();
