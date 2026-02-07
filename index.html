@@ -121,7 +121,7 @@ if(dist>50)break;
 }
 
 // Mountain range with optional snow caps
-function drawMtn(by,h,s,c,ox,sc){
+function drawMtn(by,h,s,c,ox,sc,sn){
 g.fillStyle=c;g.beginPath();g.moveTo(-20,H);
 for(let i=-20;i<=W+20;i+=6){
 let w=i+ox,m=Math.sin(w*.005+s)*h*.4+Math.sin(w*.013+s*2.3)*h*.35+Math.sin(w*.027+s*4.7)*h*.25;
@@ -130,11 +130,12 @@ g.lineTo(i,by-m);
 g.lineTo(W+20,H);g.closePath();g.fill();
 if(sc){
 g.fillStyle=sc;g.beginPath();
-let sl=h*.45;
+let sl=h*(sn||.45);
 g.moveTo(-20,by-sl);
 for(let i=-20;i<=W+20;i+=6){
-let w=i+ox,m=Math.sin(w*.005+s)*h*.4+Math.sin(w*.013+s*2.3)*h*.35+Math.sin(w*.027+s*4.7)*h*.25;
-g.lineTo(i,m>sl?by-m:by-sl);
+let w=i+ox,slv=sl+Math.sin(w*.05+s*2)*h*.04;
+let m=Math.sin(w*.005+s)*h*.4+Math.sin(w*.013+s*2.3)*h*.35+Math.sin(w*.027+s*4.7)*h*.25;
+g.lineTo(i,m>slv?by-m:by-sl);
 }
 g.lineTo(W+20,by-sl);g.closePath();g.fill();
 }
@@ -165,9 +166,9 @@ g.beginPath();g.arc(sunX,sunY,10,0,PI*2);g.fill();
 
 // Mountain ranges with parallax (far to near, each fills to screen bottom)
 let px=-camAngle*W*0.6,fz=camZ*0.05;
-drawMtn(H*0.22,100,0.5,'#b0c0d4',px*0.15+fz*0.1);
-drawMtn(H*0.30,85,1.7,'#9aabbd',px*0.35+fz*0.2,'#d0dce8');
-drawMtn(H*0.38,65,3.1,'#8494a8',px*0.7+fz*0.5);
+drawMtn(H*0.22,100,0.5,'#b0c0d4',px*0.15+fz*0.1,'#e8eef4',.2);
+drawMtn(H*0.30,85,1.7,'#9aabbd',px*0.35+fz*0.2,'#d0dce8',.35);
+drawMtn(H*0.38,65,3.1,'#8494a8',px*0.7+fz*0.5,'#c0cad6',.25);
 drawMtn(H*0.45,50,5.3,'#7080a0',px*1.2+fz*0.8);
 
 // 3D column raycaster terrain
