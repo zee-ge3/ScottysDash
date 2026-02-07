@@ -120,6 +120,7 @@ if(dist>50)break;
 }
 }
 
+
 // Mountain range with optional snow caps
 function drawMtn(by,h,s,c,ox,sc,sn){
 g.fillStyle=c;g.beginPath();g.moveTo(-20,H);
@@ -278,32 +279,43 @@ g.fillRect(-3+i,by-4,1,1);
 g.restore();
 }
 
-// Bobsled + rider
+// Sled + rider (rear view)
 function drawSled(x,y,sc){
 let lean=turnRate*0.3;
 g.save();g.translate(x,y);g.scale(sc,sc);g.rotate(lean*0.15-lateralSlope*0.8);
 // Shadow
 g.fillStyle='rgba(0,0,0,0.15)';
-g.beginPath();g.ellipse(0,11,13,3,0,0,PI*2);g.fill();
-// Runners
+g.beginPath();g.ellipse(0,12,10,3,0,0,PI*2);g.fill();
+// Runners (two vertical lines, splayed)
 g.fillStyle='#654321';
-g.fillRect(-8,7,18,1);g.fillRect(-8,9,18,1);
-// Sled body
-g.fillStyle='#8B4513';g.fillRect(-7,5,14,2);
-// Curved front
-g.fillRect(9,6,2,1);g.fillRect(10,5,1,1);
-// Student body (dark jacket)
-g.fillStyle='#445';g.fillRect(-3,-2,6,7);
-// Scarf
-g.fillStyle='#c49102';g.fillRect(-3,0,6,1);
-// Arms holding reins
-g.fillStyle='#445';g.fillRect(-4,0,1,3);g.fillRect(3,0,1,3);
-// Head
-g.fillStyle='#dba';g.fillRect(-2,-5,4,3);
+g.fillRect(-8,4,2,7);g.fillRect(6,4,2,7);
+// Runner blades
+g.fillStyle='#888';
+g.fillRect(-9,10,3,1);g.fillRect(6,10,3,1);
+// Cross bars
+g.fillStyle='#8B4513';
+g.fillRect(-7,5,14,1);g.fillRect(-7,8,14,1);
+// Sled basket back
+g.fillStyle='#a06820';
+g.fillRect(-6,2,12,3);
+// Handlebar
+g.fillStyle='#654321';
+g.fillRect(-7,1,1,4);g.fillRect(6,1,1,4);
+g.fillRect(-7,1,14,1);
+// Rider torso (back view)
+g.fillStyle='#445';g.fillRect(-4,-4,8,6);
+// Shoulders
+g.fillRect(-5,-3,1,2);g.fillRect(4,-3,1,2);
+// Arms gripping handlebar
+g.fillRect(-6,-1,2,3);g.fillRect(4,-1,2,3);
+// Head (back of)
+g.fillStyle='#dba';g.fillRect(-2,-7,4,3);
 // Beanie
-g.fillStyle='#bb0000';g.fillRect(-2,-7,4,2);
+g.fillStyle='#bb0000';g.fillRect(-3,-9,6,2);
 // Pom pom
-g.fillStyle='#fff';g.fillRect(-1,-8,2,1);
+g.fillStyle='#fff';g.fillRect(-1,-10,2,1);
+// Scarf trailing
+g.fillStyle='#c49102';g.fillRect(-3,-4,6,1);
 g.restore();
 }
 
@@ -367,6 +379,7 @@ pZ+=speed*dt*0.5;
 
 // Snap player Y to ground height
 pY=getHeight(pX,pZ);
+
 
 // Score
 score+=speed*dt*2;
