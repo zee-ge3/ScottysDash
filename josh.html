@@ -487,53 +487,74 @@ function renderObstacles(){
     let ob=obstacles[i];
     let wy=getHeight(ob.x,ob.z);
     let p=project(ob.x,wy,ob.z);
-    if(p.z>0.5&&p.z<45&&p.x>-200&&p.x<W+200){
-      // Ray occlusion: cast from camera to obstacle in world space
-      // Check if any terrain along the way rises above the line of sight
-      let maxExcess=0;
-      let bestBx=0,bestBz=0,bestBh=0;
-      let steps=10;
-      for(let s=1;s<steps;s++){
-        let t=s/steps;
-        let sx=camX+(ob.x-camX)*t;
-        let sz=camZ+(ob.z-camZ)*t;
-        let losY=camY+(wy-camY)*t;
-        let terrainH=getHeight(sx,sz);
-        let excess=terrainH-losY;
-        if(excess>maxExcess){
-          maxExcess=excess;
-          bestBx=sx;bestBz=sz;bestBh=terrainH;
-        }
-      }
-      if(maxExcess>0.3){
-        // Occluded — project the blocking terrain to get a clip line
-        let bp=project(bestBx,bestBh,bestBz);
-        visible.push({ob,p,wy,clipY:bp.y});
-      }else{
-        // No occlusion — fully visible, no clip
-        visible.push({ob,p,wy,clipY:-1});
-      }
+    if(p.z<0.5||p.z>45||p.x<-200||p.x>W+200)continue;
+
+    // World-space ray occlusion: find the most blocking terrain between camera and obstacle
+    let maxExcess=0;
+    let bestT=0;
+    for(let s=1;s<12;s++){
+      let t=s/12;
+      let sx=camX+(ob.x-camX)*t;
+      let sz=camZ+(ob.z-camZ)*t;
+      let losY=camY+(wy-camY)*t;
+      let terrainH=getHeight(sx,sz);
+      let excess=terrainH-losY;
+      if(excess>maxExcess){maxExcess=excess;bestT=t;}
     }
+
+    // Store crest info for curved clip (very low threshold for smooth transition)
+    let crest=null;
+    if(maxExcess>0){
+      crest={
+        x:camX+(ob.x-camX)*bestT,
+        z:camZ+(ob.z-camZ)*bestT
+      };
+    }
+
+    // Ground snap
+    let col=Math.round(Math.max(0,Math.min(W-1,p.x)));
+    let baseY=p.y;
+    if(p.y<terrainSil[col])baseY=terrainSil[col];
+
+    visible.push({ob,p,wy,crest,baseY});
   }
   visible.sort((a,b)=>b.p.z-a.p.z);
   for(let i=0;i<visible.length;i++){
-    let {ob,p,wy,clipY}=visible[i];
+    let {ob,p,wy,crest,baseY}=visible[i];
     let sc=80/p.z;
     let fogT=Math.min(1,p.z*p.z*0.0004);
 
     g.save();
-    if(clipY>=0){
-      // Crest clip: only show the part of the obstacle above the blocking terrain
+    if(crest){
+      // Curved clip following the crest terrain profile
+      // Sample terrain heights across the crest at the blocking Z
+      let span=12; // world units to sample across
+      let ns=10;
       g.beginPath();
-      g.rect(0,0,W,clipY);
+      // Top-left corner (visible region above crest)
+      let firstX=crest.x-span;
+      let fp=project(firstX,getHeight(firstX,crest.z),crest.z);
+      g.moveTo(fp.x,0);
+      // Top-right corner
+      let lastX=crest.x+span;
+      let lp=project(lastX,getHeight(lastX,crest.z),crest.z);
+      g.lineTo(lp.x,0);
+      // Follow crest curve right to left
+      for(let j=ns;j>=0;j--){
+        let wx=crest.x+(j/ns-0.5)*span*2;
+        let h=getHeight(wx,crest.z);
+        let cp=project(wx,h,crest.z);
+        g.lineTo(cp.x,cp.y);
+      }
+      g.closePath();
       g.clip();
     }
 
     // Shadow on ground
     g.fillStyle=`rgba(0,0,0,${0.15*(1-fogT)})`;
     let shSz=sc*0.8;
-    g.beginPath();g.ellipse(p.x,p.y+shSz*0.15,shSz*1.2,shSz*0.25,0,0,PI*2);g.fill();
-    drawTree(p.x,p.y,sc,ob.type,fogT);
+    g.beginPath();g.ellipse(p.x,baseY+shSz*0.15,shSz*1.2,shSz*0.25,0,0,PI*2);g.fill();
+    drawTree(p.x,baseY,sc,ob.type,fogT);
     g.restore();
   }
 }
