@@ -7,12 +7,20 @@ let W,H;
 function resize(){W=c.width=innerWidth;H=c.height=innerHeight}
 resize();onresize=resize;
 
-const DRAW=70,PI=Math.PI;
-let state=0,dist=0,speed=0,playerX=0,turnRate=0;
+const DRAW=80,PI=Math.PI;
+let state=0,speed=0,turnRate=0;
 let score=0,combo=1,maxCombo=1,hiScore=+localStorage.getItem('hs')||0;
 let inputX=0,inputTuck=0,crashed=0,crashTimer=0;
 let particles=[],shakeX=0,shakeY=0;
 let lastTime=0,audioCtx,sndCarve;
+// Player world position
+let pX=0,pY=0,pZ=0;
+// Camera world position (smoothed, decoupled from player)
+let camX=0,camY=3,camZ=-5;
+// Player screen position (updated by render, used by particles)
+let pScrX=0,pScrY=0;
+
+function lerp(a,b,t){return a+(b-a)*t}
 
 function initAudio(){
 if(audioCtx)return;
@@ -32,9 +40,14 @@ s.buffer=b;s.connect(audioCtx.destination);s.start();
 }catch(e){}
 }
 
-// Terrain functions
-function curvature(i){return Math.sin(i*0.013)*5+Math.sin(i*0.029)*3+Math.sin(i*0.067)*1.5}
-function elevation(i){return Math.sin(i*0.009)*40+Math.sin(i*0.023)*20+Math.sin(i*0.051)*10}
+// === 1. SOURCE OF TRUTH: Height function ===
+function getHeight(x,z){
+return (Math.sin(z*0.009)*40+Math.sin(z*0.023)*20+Math.sin(z*0.051)*10
++Math.sin(z*0.1)*8+Math.sin(x*0.04+z*0.012)*5)*0.25;
+}
+
+// Visual curvature (lateral path bending for aesthetics)
+function curvature(z){return Math.sin(z*0.013)*5+Math.sin(z*0.029)*3+Math.sin(z*0.067)*1.5}
 function terrainType(i){let v=Math.sin(i*0.037)*0.5+0.5;if(i>500)v+=0.15;if(i>1500)v+=0.15;return v<0.25?0:v<0.6?1:v<0.8?2:3}
 
 // Draw trapezoid
@@ -46,10 +59,12 @@ g.lineTo(x2+w2,y2);g.lineTo(x2-w2,y2);
 g.fill();
 }
 
+// === 4. RENDERING: Project world from camera perspective ===
 function render(){
 let horizon=H*0.38;
+let focal=H*0.5;
 
-// Sky gradient (extends past horizon so no gap with terrain)
+// Sky gradient
 let grd=g.createLinearGradient(0,0,0,horizon+30);
 grd.addColorStop(0,'#4a8fc7');
 grd.addColorStop(0.85,'#b0d8f0');
@@ -57,13 +72,13 @@ grd.addColorStop(1,'#dde5ec');
 g.fillStyle=grd;
 g.fillRect(0,0,W,horizon+30);
 
-// Base snow fill below sky
+// Base snow fill
 g.fillStyle='#dde5ec';
 g.fillRect(0,horizon+20,W,H-horizon-20);
 
-// Mountains with parallax (bases extend below horizon)
+// Mountains (parallax with camera)
 for(let i=0;i<6;i++){
-let mx=((i*W*0.22+dist*0.3+i*197)%(W+200))-100;
+let mx=((i*W*0.22+camZ*0.3+i*197)%(W+200))-100;
 let mh=45+i*18;
 g.fillStyle='#7888a0';
 g.beginPath();g.moveTo(mx-100,horizon+10);g.lineTo(mx,horizon-mh);g.lineTo(mx+110,horizon+10);g.fill();
@@ -71,25 +86,31 @@ g.fillStyle='#e0e8f0';
 g.beginPath();g.moveTo(mx-25,horizon-mh*0.5);g.lineTo(mx,horizon-mh);g.lineTo(mx+30,horizon-mh*0.5);g.fill();
 }
 
-let camZ=dist;
 let baseI=Math.floor(camZ);
 
-// Build segment projections with accumulated curve (near to far)
+// Build terrain segments: project each strip from camera perspective
 let segs=[];
 let accCurve=0;
+let playerN=Math.round(pZ-camZ);
+let playerAccCurve=0;
+
 for(let n=0;n<=DRAW;n++){
 let si=baseI+n;
 let dz=si-camZ;
 if(dz<0.2)dz=0.2;
 
+// Accumulate visual curvature
 accCurve+=curvature(si)*0.008;
-let elev=(elevation(si)-elevation(baseI))*1.5;
+if(n==playerN)playerAccCurve=accCurve;
 
-// Core perspective: y = horizon + viewHeight/dz
-let sy=horizon+(H*0.64-elev)/dz+shakeY;
-// X position: road center shifts with accumulated curve and player offset
-let sx=W/2+(accCurve-playerX)*W*0.4/dz+shakeX;
-// Terrain width: min W ensures full coverage at all distances
+// Sample ground height at this strip's world Z
+let groundH=getHeight(camX,si);
+// Height relative to camera (negative = camera above ground)
+let relY=groundH-camY;
+
+// Perspective projection from camera viewpoint
+let sy=horizon-relY*focal/dz+shakeY;
+let sx=W/2+accCurve*W*0.15/dz+shakeX;
 let tw=Math.max(W,W*2.5/dz);
 
 segs.push({si:si,sx:sx,sy:sy,tw:tw,dz:dz});
@@ -108,9 +129,7 @@ else if(tt==1)col=ch?'#f0f5fa':'#e2eaf2';
 else if(tt==2)col=ch?'#c0d4e8':'#aec4d8';
 else col=ch?'#d0d8e0':'#c0c8d0';
 
-// Draw terrain strip (+1px overlap to prevent hairline gaps)
 D(f.sx,f.sy,f.tw,nr.sx,nr.sy+1,nr.tw,col);
-
 }
 
 // Speed lines
@@ -124,8 +143,16 @@ g.beginPath();g.moveTo(lx,ly);g.lineTo(lx+turnRate*5,ly+15+speed*2);g.stroke();
 }
 }
 
-// Skier
-drawSkier();
+// === 5. RENDER PLAYER: Project player model within the world ===
+let playerDZ=pZ-camZ;
+if(playerDZ>0.3){
+let relX=pX-camX;
+let relY=pY-camY;
+pScrX=W/2+(playerAccCurve+relX*2)*W*0.15/playerDZ+shakeX;
+pScrY=horizon-relY*focal/playerDZ+shakeY;
+let pSc=9/playerDZ;
+drawSkier(pScrX,pScrY,pSc);
+}
 
 // Particles
 for(let i=particles.length-1;i>=0;i--){
@@ -137,15 +164,12 @@ if(p.life<=0)particles.splice(i,1);
 }
 }
 
-function drawSkier(){
-let sx=W/2+shakeX,sy=H*0.7+shakeY;
+// Draw skier at projected screen position with perspective scale
+function drawSkier(sx,sy,sc){
 let lean=turnRate*0.3;
-let tuck=inputTuck;
-let S=1.8; // sprite scale
-
 g.save();
 g.translate(sx,sy);
-g.scale(S,S);
+g.scale(sc,sc);
 g.rotate(lean*0.15);
 
 // Shadow
@@ -161,18 +185,18 @@ g.restore();
 
 // Legs
 g.fillStyle='#222';
-let legH=tuck?8:12;
+let legH=inputTuck?8:12;
 g.fillRect(-6,0,4,legH);
 g.fillRect(2,0,4,legH);
 
 // Body
 g.fillStyle='#d22';
-if(tuck){g.fillRect(-8,-6,16,8)}
+if(inputTuck){g.fillRect(-8,-6,16,8)}
 else{g.fillRect(-7,-14,14,16)}
 
 // Arms + poles
 g.strokeStyle='#222';g.lineWidth=2;
-let armY=tuck?-4:-8;
+let armY=inputTuck?-4:-8;
 g.beginPath();g.moveTo(-7,armY);g.lineTo(-14+lean*3,armY+8);g.stroke();
 g.beginPath();g.moveTo(7,armY);g.lineTo(14+lean*3,armY+8);g.stroke();
 g.strokeStyle='#999';g.lineWidth=1;
@@ -181,7 +205,7 @@ g.beginPath();g.moveTo(14+lean*3,armY+8);g.lineTo(16+lean*4,armY+25);g.stroke();
 
 // Head
 g.fillStyle='#fdb';
-let headY=tuck?-10:-18;
+let headY=inputTuck?-10:-18;
 g.beginPath();g.arc(0,headY,5,0,PI*2);g.fill();
 g.fillStyle='#d22';
 g.beginPath();g.arc(0,headY-1,5,PI,0);g.fill();
@@ -192,10 +216,9 @@ g.restore();
 }
 
 function spraySnow(){
-let sx=W/2,sy=H*0.72;
 for(let i=0;i<3;i++){
 particles.push({
-x:sx+(turnRate>0?-15:15),y:sy+10,
+x:pScrX+(turnRate>0?-15:15),y:pScrY+10,
 vx:-turnRate*2+Math.random()*2-1,
 vy:-Math.random()*3-1,
 life:15+Math.random()*10|0,ml:25,
@@ -220,9 +243,12 @@ function update(dt){
 if(state!=1)return;
 if(dt>0.1)dt=0.1;
 
-let camSeg=Math.floor(dist);
-let slopeAngle=0.15+(elevation(camSeg+5)-elevation(camSeg))*0.003;
-let tt=terrainType(camSeg);
+// === 2. PLAYER POSITIONING: Snap to ground ===
+// Slope from height function (sample ahead vs behind)
+let slopeAhead=getHeight(pX,pZ+2)-getHeight(pX,pZ-2);
+let slopeAngle=0.15+slopeAhead*0.008;
+
+let tt=terrainType(Math.floor(pZ));
 let friction=tt==0?0.015:tt==1?0.025:tt==2?0.008:0.02;
 let gravity=9.8*slopeAngle;
 let turnDrag=Math.abs(turnRate)*0.08;
@@ -234,21 +260,35 @@ speed-=(friction+turnDrag)*speed*dt;
 speed-=airDrag*dt;
 speed=Math.max(2,Math.min(speed,20));
 
-let curv=curvature(camSeg)*0.002;
+// Steering
+let curv=curvature(pZ)*0.002;
 turnRate+=(inputX*1.5-turnRate)*dt*4;
-playerX+=turnRate*dt*0.8;
-playerX+=curv*speed*dt*0.1;
+pX+=turnRate*dt*0.8;
+pX+=curv*speed*dt*0.1;
 
+// Move forward
+pZ+=speed*dt*0.5;
 
-dist+=speed*dt*0.5;
+// Snap player Y to ground height
+pY=getHeight(pX,pZ);
+
+// Score
 score+=speed*dt*2;
 
+// === 3. CAMERA LOGIC: Spring arm with lerp ===
+let t=Math.min(1,dt*5);
+camX=lerp(camX,pX,t);
+camY=lerp(camY,pY+3,t);
+camZ=lerp(camZ,pZ-5,t);
+
+// Snow effects
 if(Math.abs(turnRate)>0.5&&speed>3){
 spraySnow();
 if(Math.random()<0.05)playBuf(sndCarve);
 }
 ambientSnow();
 
+// Shake decay
 shakeX*=0.85;shakeY*=0.85;
 if(Math.abs(shakeX)<0.5)shakeX=0;
 if(Math.abs(shakeY)<0.5)shakeY=0;
@@ -307,7 +347,7 @@ g.fillText('CRASHED!',W/2,H*0.35);
 g.fillStyle='#fff';
 g.font=Math.max(18,W*0.05|0)+'px monospace';
 g.fillText('Score: '+Math.floor(score),W/2,H*0.47);
-g.fillText('Distance: '+Math.floor(dist)+'m',W/2,H*0.54);
+g.fillText('Distance: '+Math.floor(pZ)+'m',W/2,H*0.54);
 if(maxCombo>1)g.fillText('Max Combo: x'+maxCombo,W/2,H*0.61);
 if(Math.floor(score)>=hiScore&&hiScore>0){
 g.fillStyle='#ff0';
@@ -321,7 +361,9 @@ g.fillText('TAP TO RETRY',W/2,H*0.78);
 }
 
 function resetGame(){
-dist=0;speed=5;playerX=0;turnRate=0;
+pX=0;pZ=0;pY=getHeight(0,0);
+speed=5;turnRate=0;
+camX=0;camY=pY+3;camZ=pZ-5;
 score=0;combo=1;maxCombo=1;crashed=0;crashTimer=0;
 particles=[];shakeX=0;shakeY=0;
 }
@@ -378,6 +420,9 @@ if(state==2)drawGameOver();
 requestAnimationFrame(frame);
 }
 
+// Initialize
+pY=getHeight(0,0);
+camY=pY+3;
 lastTime=performance.now();
 requestAnimationFrame(frame);
 </script></body></html>
