@@ -19,7 +19,7 @@ let pX=0,pY=0,pZ=0;
 let camX=0,camY=3,camZ=-5;
 let camAngle=0;
 // Player screen position (updated by render, used by particles)
-let pScrX=0,pScrY=0,pScrSc=1,slopeVal=0,prevSpd=7.5,accelVal=0,smoothFov=0.65;
+let pScrX=0,pScrY=0,pScrSc=1,slopeVal=0,lateralSlope=0,prevSpd=7.5,accelVal=0,smoothFov=0.65;
 
 function lerp(a,b,t){return a+(b-a)*t}
 
@@ -208,11 +208,13 @@ let wS=27/wp.z;
 // Dog screen positions (tighter spread)
 let ldLx=lp.x-8*lS,ldRx=lp.x+8*lS;
 let wdLx=wp.x-6*wS,wdRx=wp.x+6*wS;
+// Lateral slope offset: positive slope = left dogs lower, right dogs higher
+let lsOff=lateralSlope*50;
 // Draw far to near: lead, wheel, harness, sled
-drawDog(ldLx,lp.y,lS,ph);
-drawDog(ldRx,lp.y,lS,ph+PI*.5);
-drawDog(wdLx,wp.y,wS,ph+PI);
-drawDog(wdRx,wp.y,wS,ph+PI*1.5);
+drawDog(ldLx,lp.y+lsOff,lS,ph);
+drawDog(ldRx,lp.y-lsOff,lS,ph+PI*.5);
+drawDog(wdLx,wp.y+lsOff,wS,ph+PI);
+drawDog(wdRx,wp.y-lsOff,wS,ph+PI*1.5);
 // Harness: lead dogs to wheel dogs
 g.strokeStyle='#654';g.lineWidth=1;
 g.beginPath();g.moveTo(ldLx,lp.y-5*lS);g.lineTo(wdLx,wp.y-5*wS);g.stroke();
@@ -334,6 +336,7 @@ if(dt>0.1)dt=0.1;
 // === 2. PLAYER POSITIONING: Snap to ground ===
 // Slope: negative=downhill (fast), positive=uphill (slow)
 slopeVal=getHeight(pX,pZ+2)-getHeight(pX,pZ-2);
+lateralSlope=(getHeight(pX+2,pZ)-getHeight(pX-2,pZ))/4;
 let slope=slopeVal<0?-slopeVal*0.12:-slopeVal*0.02;
 
 let tt=terrainType(Math.floor(pZ));
