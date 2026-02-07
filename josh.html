@@ -339,7 +339,7 @@ function spawnObstacles(){
   let cellZ=5, cellX=6;
   // Range around player to populate
   let rangeX=60; // far left/right of player
-  let rangeZbehind=10, rangeZahead=80;
+  let rangeZbehind=10, rangeZahead=120;
 
   let minCZ=Math.floor((pZ-rangeZbehind)/cellZ);
   let maxCZ=Math.floor((pZ+rangeZahead)/cellZ);
@@ -438,31 +438,32 @@ function drawTree(sx,sy,sc,type,fogT){
       g.fill();
     }
   } else if(type===1){
-    // Rock
-    let sz=sc*6.4;
+    // Rock — sunk into ground, lower profile
+    let sz=sc*4;
+    let base=sy+sz*0.25; // sink bottom into terrain
     g.fillStyle=fogCol(85,90,105);
     g.beginPath();
-    g.moveTo(sx-sz,sy);
-    g.lineTo(sx-sz*0.7,sy-sz*1.1);
-    g.lineTo(sx+sz*0.3,sy-sz*1.5);
-    g.lineTo(sx+sz,sy-sz*0.7);
-    g.lineTo(sx+sz*0.8,sy);
+    g.moveTo(sx-sz,base);
+    g.lineTo(sx-sz*0.7,base-sz*0.9);
+    g.lineTo(sx+sz*0.3,base-sz*1.2);
+    g.lineTo(sx+sz,base-sz*0.55);
+    g.lineTo(sx+sz*0.8,base);
     g.closePath();
     g.fill();
     // Highlight
     g.fillStyle=fogCol(120,125,140);
     g.beginPath();
-    g.moveTo(sx-sz*0.6,sy-sz*0.6);
-    g.lineTo(sx+sz*0.3,sy-sz*1.5);
-    g.lineTo(sx+sz*0.7,sy-sz*0.8);
+    g.moveTo(sx-sz*0.6,base-sz*0.5);
+    g.lineTo(sx+sz*0.3,base-sz*1.2);
+    g.lineTo(sx+sz*0.7,base-sz*0.6);
     g.closePath();
     g.fill();
     // Snow cap
     g.fillStyle=fogCol(210,220,230);
     g.beginPath();
-    g.moveTo(sx-sz*0.4,sy-sz*0.95);
-    g.lineTo(sx+sz*0.3,sy-sz*1.5);
-    g.lineTo(sx+sz*0.65,sy-sz*0.8);
+    g.moveTo(sx-sz*0.4,base-sz*0.75);
+    g.lineTo(sx+sz*0.3,base-sz*1.2);
+    g.lineTo(sx+sz*0.65,base-sz*0.65);
     g.closePath();
     g.fill();
   } else {
@@ -487,7 +488,7 @@ function renderObstacles(){
     let ob=obstacles[i];
     let wy=getHeight(ob.x,ob.z);
     let p=project(ob.x,wy,ob.z);
-    if(p.z<0.5||p.z>45||p.x<-200||p.x>W+200)continue;
+    if(p.z<0.5||p.z>60||p.x<-200||p.x>W+200)continue;
 
     // World-space ray occlusion: find the most blocking terrain between camera and obstacle
     let maxExcess=0;
@@ -502,12 +503,15 @@ function renderObstacles(){
       if(excess>maxExcess){maxExcess=excess;bestT=t;}
     }
 
-    // Store crest info for curved clip (very low threshold for smooth transition)
+    // Crest info for curved clip with smooth blend
+    // blend: 1 = full crest clip, 0 = clip at obstacle base (invisible)
     let crest=null;
     if(maxExcess>0){
+      let blend=Math.min(1,maxExcess/(p.z*0.015+0.1));
       crest={
         x:camX+(ob.x-camX)*bestT,
-        z:camZ+(ob.z-camZ)*bestT
+        z:camZ+(ob.z-camZ)*bestT,
+        blend:blend
       };
     }
 
@@ -522,38 +526,55 @@ function renderObstacles(){
   for(let i=0;i<visible.length;i++){
     let {ob,p,wy,crest,baseY}=visible[i];
     let sc=80/p.z;
-    let fogT=Math.min(1,p.z*p.z*0.0004);
+    let fogT=Math.min(1,p.z*p.z*0.0003);
 
     g.save();
+    // Alpha fade for distant obstacles (atmospheric fog)
+    if(fogT>0.05)g.globalAlpha=Math.max(0,1-fogT);
     if(crest){
       // Curved clip following the crest terrain profile
-      // Sample terrain heights across the crest at the blocking Z
-      let span=12; // world units to sample across
+      // blend: 1 = clip at crest, 0 = clip at obstacle base (no visual effect)
+      let bl=crest.blend;
+      let span=12;
       let ns=10;
       g.beginPath();
-      // Top-left corner (visible region above crest)
       let firstX=crest.x-span;
       let fp=project(firstX,getHeight(firstX,crest.z),crest.z);
       g.moveTo(fp.x,0);
-      // Top-right corner
       let lastX=crest.x+span;
       let lp=project(lastX,getHeight(lastX,crest.z),crest.z);
       g.lineTo(lp.x,0);
-      // Follow crest curve right to left
+      // Follow crest curve right to left, blended toward baseY
       for(let j=ns;j>=0;j--){
         let wx=crest.x+(j/ns-0.5)*span*2;
         let h=getHeight(wx,crest.z);
         let cp=project(wx,h,crest.z);
-        g.lineTo(cp.x,cp.y);
+        // Blend clip line between crest and obstacle base
+        let cy=cp.y*bl+baseY*(1-bl);
+        g.lineTo(cp.x,cy);
       }
       g.closePath();
       g.clip();
     }
 
-    // Shadow on ground
-    g.fillStyle=`rgba(0,0,0,${0.15*(1-fogT)})`;
-    let shSz=sc*0.8;
-    g.beginPath();g.ellipse(p.x,baseY+shSz*0.15,shSz*1.2,shSz*0.25,0,0,PI*2);g.fill();
+    // Shadow on ground — sized and positioned per obstacle type
+    let shAlpha=0.18*(1-fogT);
+    if(ob.type===0){
+      // Pine tree: small shadow at trunk base
+      let sw=sc*2,sh=sc*0.4;
+      g.fillStyle=`rgba(0,0,0,${shAlpha})`;
+      g.beginPath();g.ellipse(p.x,baseY,sw,sh,0,0,PI*2);g.fill();
+    }else if(ob.type===1){
+      // Rock: wide shadow right at base
+      let sw=sc*3.5,sh=sc*0.6;
+      g.fillStyle=`rgba(0,0,0,${shAlpha})`;
+      g.beginPath();g.ellipse(p.x+sc*0.5,baseY+sc*0.3,sw,sh,0,0,PI*2);g.fill();
+    }else{
+      // Bare tree: narrow shadow at trunk
+      let sw=sc*1.5,sh=sc*0.3;
+      g.fillStyle=`rgba(0,0,0,${shAlpha})`;
+      g.beginPath();g.ellipse(p.x,baseY,sw,sh,0,0,PI*2);g.fill();
+    }
     drawTree(p.x,baseY,sc,ob.type,fogT);
     g.restore();
   }
