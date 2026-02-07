@@ -35,6 +35,8 @@
     let score = 0, combo = 1, maxCombo = 1, hiScore = +localStorage.getItem('hs') || 0;
     let inputX = 0, inputTuck = 0, crashed = 0, crashTimer = 0;
     let particles = [], shakeX = 0, shakeY = 0;
+    // Trail history: arrays of {lx,lz,rx,rz} for left/right runner positions
+    let trailHist = [], trailMaxLen = 120;
     // Obstacles: {x,z,type} type: 0=pine tree, 1=rock, 2=bare tree
     let obstacles = [], lastSpawnZ = 0;
     let lastTime = 0;
@@ -218,6 +220,39 @@
       }
 
 
+      // === SNOW TRACKS under sled runners (from recorded history) ===
+      if (trailHist.length > 1) {
+        let trackW = 0.025;
+        for (let r = 0; r < 2; r++) {
+          g.beginPath();
+          let started = false;
+          // Forward edge (left side of track)
+          for (let i = 0; i < trailHist.length; i++) {
+            let h = trailHist[i];
+            let tx = r === 0 ? h.lx : h.rx;
+            let tz = r === 0 ? h.lz : h.rz;
+            let ty = getHeight(tx, tz);
+            let tp = project(tx - trackW, ty, tz);
+            if (tp.z < 0.5 || tp.z > 45) continue;
+            if (!started) { g.moveTo(tp.x, tp.y); started = true; }
+            else g.lineTo(tp.x, tp.y);
+          }
+          // Return edge (right side of track)
+          for (let i = trailHist.length - 1; i >= 0; i--) {
+            let h = trailHist[i];
+            let tx = r === 0 ? h.lx : h.rx;
+            let tz = r === 0 ? h.lz : h.rz;
+            let ty = getHeight(tx, tz);
+            let tp = project(tx + trackW, ty, tz);
+            if (tp.z < 0.5 || tp.z > 45) continue;
+            g.lineTo(tp.x, tp.y);
+          }
+          g.closePath();
+          g.fillStyle = 'rgba(30,35,50,0.3)';
+          g.fill();
+        }
+      }
+
       // === 5. RENDER BOBSLED TEAM ===
       let pp = project(pX, pY, pZ);
       if (pp.z > 0.3) {
@@ -352,6 +387,36 @@
           vy: -Math.random() * 3 - 1,
           life: 15 + Math.random() * 10 | 0, ml: 25,
           sz: 2 + Math.random() * 3
+        });
+      }
+    }
+
+    function runnerSpray() {
+      // Snow spray from each sled runner blade, rotated with sled tilt
+      let ang = turnRate * 0.3 * 0.15 - lateralSlope * 0.8;
+      let cs = Math.cos(ang), sn = Math.sin(ang);
+      // Left runner blade local pos (-8, 11), right (7, 11)
+      let llx = -8 * cs - 11 * sn, lly = -8 * sn + 11 * cs;
+      let rlx = 7 * cs - 11 * sn, rly = 7 * sn + 11 * cs;
+      let lx = pScrX + llx * pScrSc, rx = pScrX + rlx * pScrSc;
+      let lby = pScrY + lly * pScrSc, rby = pScrY + rly * pScrSc;
+      let n = 1 + (speed / 15 | 0);
+      for (let i = 0; i < n; i++) {
+        // Left runner
+        particles.push({
+          x: lx + Math.random() * 3 - 1, y: lby + Math.random() * 2,
+          vx: -0.8 - Math.random() * 1 + turnRate * 0.3,
+          vy: -Math.random() * 1.5 - 0.3,
+          life: 10 + Math.random() * 8 | 0, ml: 18,
+          sz: 1.5 + Math.random() * 2.5
+        });
+        // Right runner
+        particles.push({
+          x: rx + Math.random() * 3 - 1, y: rby + Math.random() * 2,
+          vx: 0.8 + Math.random() * 1 + turnRate * 0.3,
+          vy: -Math.random() * 1.5 - 0.3,
+          life: 10 + Math.random() * 8 | 0, ml: 18,
+          sz: 1.5 + Math.random() * 2.5
         });
       }
     }
@@ -677,6 +742,12 @@
       // Snap player Y to ground height
       pY = getHeight(pX, pZ);
 
+      // Record trail positions (left and right runner)
+      let rOff = 0.2;
+      let trailZOff = 0.42 * Math.min(1, Math.max(0.35, -slopeVal * 0.5));
+      trailHist.unshift({ lx: pX - rOff, lz: pZ - trailZOff, rx: pX + rOff, rz: pZ - trailZOff });
+      if (trailHist.length > trailMaxLen) trailHist.length = trailMaxLen;
+
       // Score
       score += speed * dt * 2;
 
@@ -696,6 +767,7 @@
         spraySnow();
       }
       ambientSnow();
+      if (speed > 5) runnerSpray();
 
       // Smooth dog turn (lags behind turnRate for natural feel)
       dogTurn = lerp(dogTurn, turnRate, Math.min(1, dt * 2));
@@ -784,7 +856,7 @@
       speed = 7.5; turnRate = 0;
       camX = 0; camY = pY + 2; camZ = pZ - 3; camAngle = 0;
       score = 0; combo = 1; maxCombo = 1; crashed = 0; crashTimer = 0;
-      particles = []; shakeX = 0; shakeY = 0; prevSpd = 7.5; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
+      particles = []; shakeX = 0; shakeY = 0; prevSpd = 7.5; accelVal = 0; smoothFov = 0.65; dogTurn = 0; trailHist = [];
       obstacles = []; lastSpawnZ = 0; spawnedCells = new Set();
     }
 
