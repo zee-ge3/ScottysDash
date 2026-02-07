@@ -1,586 +1,1507 @@
-<!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,user-scalable=no"><title>Infinite Ski</title><style>*{margin:0;padding:0}body{background:#000;overflow:hidden;touch-action:none}canvas{display:block}</style></head><body><canvas id=c></canvas><script>
-// ZzFX Micro - Sound Generator
-zzfxG=(p=1,k=.05,b=.22,e=0,r=0,t=.1,u=0,f=1,v=0,z=0,w=0,A=0,l=0,B=0,C=0,F=0,d=0,q=1,h=0,I=0)=>{let a=2*Math.PI,R=44100,m=Math.max,s=v*=500*a/R/R,O=b*R|0,n=t*R|0,J=e*R|0,E=r*R|0,X=d*R|0,Y=h*R|0,Z=I*R|0,T=O+J+n+E+X,i=T,o=[],y=0,j=0,K=0;for(;K<i;K++){let L=K/R,M=K<O?K/O:K<O+J?1:K<T-E?m(0,1-(K-O-J)/n):K<T?m(0,1-((K-T+E)/E)):0;M=M<=0?0:M;y+=1+u*2*a/R;let N=Math.sin(y)*M*p*(1+B*Math.sin(2*a*L*l));j+=N;if(z||w||A){s+=w*500*a/R/R;v=z*500*a/R+s;j+=Math.sin(v)*A*M}o.push(F?K<Y?0:K>T-Z?0:N*(1+C*Math.sin(2*a*L*f)):N*(1+C*Math.sin(2*a*L*f)))}return o};
+<!DOCTYPE html>
+<html>
 
-let c=document.getElementById('c'),g=c.getContext('2d');
-let W,H;
-function resize(){W=c.width=innerWidth;H=c.height=innerHeight}
-resize();onresize=resize;
+<head>
+  <meta charset=utf-8>
+  <meta name=viewport content="width=device-width,initial-scale=1,user-scalable=no">
+  <title>Scotty's Dash</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0
+    }
 
-const PI=Math.PI;
-let state=0,speed=0,turnRate=0;
-let score=0,combo=1,maxCombo=1,hiScore=+localStorage.getItem('hs')||0;
-let inputX=0,inputTuck=0,crashed=0,crashTimer=0;
-let particles=[],shakeX=0,shakeY=0;
-let lastTime=0,audioCtx,sndCarve;
-// Player world position
-let pX=0,pY=0,pZ=0;
-// Camera world position (smoothed, decoupled from player)
-let camX=0,camY=3,camZ=-5;
-let camAngle=0;
-// Player screen position (updated by render, used by particles)
-let pScrX=0,pScrY=0,pScrSc=1,slopeVal=0,lateralSlope=0,prevSpd=7.5,accelVal=0,smoothFov=0.65;
+    body {
+      background: #000;
+      overflow: hidden;
+      touch-action: none
+    }
 
-function lerp(a,b,t){return a+(b-a)*t}
+    canvas {
+      display: block
+    }
+  </style>
+</head>
 
-// Project world coords to screen via camera rotation + perspective divide
-function project(wx,wy,wz){
-let dx=wx-camX,dy=wy-camY,dz=wz-camZ;
-let cs=Math.cos(camAngle),sn=Math.sin(camAngle);
-let rz=dx*sn+dz*cs;
-let rx=dx*cs-dz*sn;
-if(rz<0.3)rz=0.3;
-let focal=H*smoothFov;
-let horizon=H*0.38;
-let sx=W/2+rx*focal/rz+shakeX;
-let sy=horizon-dy*focal/rz+shakeY;
-let sc=focal/rz;
-return {x:sx,y:sy,s:sc,z:rz};
-}
+<body><canvas id=c></canvas>
+  <script>
+    let c = document.getElementById('c'), g = c.getContext('2d');
+    let W, H;
+    let S; // S = min(W,H) for aspect-ratio-independent scaling
+    function resize() { W = c.width = innerWidth; H = c.height = innerHeight; S = Math.min(W, H) }
+    resize(); onresize = resize;
 
-function initAudio(){
-if(audioCtx)return;
-try{
-audioCtx=new(window.AudioContext||webkitAudioContext);
-audioCtx.resume();
-sndCarve=zzfxG(.3,.02,.08,0,.04,.04,2,1.5);
-}catch(e){}
-}
-function playBuf(buf){
-if(!audioCtx||!buf)return;
-try{
-let b=audioCtx.createBuffer(1,buf.length,44100),d=b.getChannelData(0);
-for(let i=0;i<buf.length;i++)d[i]=buf[i];
-let s=audioCtx.createBufferSource();
-s.buffer=b;s.connect(audioCtx.destination);s.start();
-}catch(e){}
-}
+    const PI = Math.PI;
+    let state = 0, speed = 0, turnRate = 0;
+    let score = 0, combo = 1, maxCombo = 1, hiScore = +localStorage.getItem('hs') || 0;
+    let inputX = 0, inputTuck = 0, crashed = 0, crashTimer = 0;
+    let particles = [], shakeX = 0, shakeY = 0;
+    // Trail history: arrays of {lx,lz,rx,rz} for left/right runner positions
+    let trailHist = [], trailMaxLen = 120;
+    // Obstacles: {x,z,type} type: 0=pine tree, 1=rock, 2=bare tree
+    let obstacles = [], lastSpawnZ = 0;
+    let lastTime = 0;
+    // Player world position
+    let pX = 0, pY = 0, pZ = 0;
+    // Camera world position (smoothed, decoupled from player)
+    let camX = 0, camY = 3, camZ = -5;
+    let camAngle = 0;
+    // Player screen position (updated by render, used by particles)
+    let pScrX = 0, pScrY = 0, pScrSc = 1, slopeVal = 0, lateralSlope = 0, prevSpd = 14, accelVal = 0, smoothFov = 0.65, dogTurn = 0;
+    // Terrain silhouette buffer - stores top-most rendered pixel and its depth per screen column
+    let terrainSil = [], terrainSilD = [];
 
-// === 1. SOURCE OF TRUTH: Height function ===
-function getHeight(x,z){
-return (Math.sin(z*0.018)*40+Math.sin(z*0.046)*20+Math.sin(z*0.102)*10
-+Math.sin(z*0.2)*8+Math.sin(x*0.08+z*0.024)*5)*0.25-z*0.04;
-}
+    // Day cycle: 0=sunset, 0.25=night, 0.5=dawn, 0.75=day
+    let dayT = 0, dPh = {};
+    const dayPhases = [
+      { sky:[[45,30,60],[75,50,70],[150,85,55],[215,125,55],[242,160,48],[252,185,65]],
+        fog:[210,155,110], sunY:.35, sunA:.4, glow:.09,
+        sB:[110,90,80], sR:[140,120,100], sunStr:1, mtn:[90,70,70] },
+      { sky:[[8,5,25],[15,10,42],[25,15,58],[40,22,70],[50,28,80],[55,32,85]],
+        fog:[35,28,65], sunY:.55, sunA:.05, glow:0,
+        sB:[30,35,55], sR:[50,45,40], sunStr:0, mtn:[25,18,40] },
+      { sky:[[20,18,55],[50,35,85],[110,55,90],[190,105,110],[225,140,115],[245,165,125]],
+        fog:[180,130,140], sunY:.38, sunA:.3, glow:.07,
+        sB:[100,85,80], sR:[130,110,90], sunStr:.7, mtn:[70,45,75] },
+      { sky:[[58,127,183],[100,160,210],[140,195,230],[192,221,240],[210,230,240],[224,232,240]],
+        fog:[192,221,240], sunY:.12, sunA:.6, glow:0,
+        sB:[90,95,110], sR:[160,155,140], sunStr:.3, mtn:[100,110,130] }
+    ];
+    const dayB = [0, 0.3, 0.4, 0.7]; // phase starts: sunset 30%, night 10%, dawn 30%, day 30%
+    function updateDay() {
+      let t = dayT % 1, i = t < dayB[1] ? 0 : t < dayB[2] ? 1 : t < dayB[3] ? 2 : 3;
+      let j = (i + 1) % 4, f = (t - dayB[i]) / ((i < 3 ? dayB[i + 1] : 1) - dayB[i]);
+      let a = dayPhases[i], b = dayPhases[j];
+      let lv = (x, y) => x + (y - x) * f, la = (x, y) => x.map((v, k) => v + (y[k] - v) * f);
+      dPh = { sky: a.sky.map((c, k) => la(c, b.sky[k])), fog: la(a.fog, b.fog),
+        sunY: lv(a.sunY, b.sunY), sunA: lv(a.sunA, b.sunA), glow: lv(a.glow, b.glow),
+        sB: la(a.sB, b.sB), sR: la(a.sR, b.sR), sunStr: lv(a.sunStr, b.sunStr), mtn: la(a.mtn, b.mtn) };
+    }
+    updateDay();
 
-// Visual curvature (lateral path bending for aesthetics)
-function curvature(z){return Math.sin(z*0.013)*5+Math.sin(z*0.029)*3+Math.sin(z*0.067)*1.5}
-function terrainType(i){let v=Math.sin(i*0.037)*0.5+0.5;if(i>500)v+=0.15;if(i>1500)v+=0.15;return v<0.25?0:v<0.6?1:v<0.8?2:3}
+    function lerp(a, b, t) { return a + (b - a) * t }
 
-// Column raycaster terrain renderer
-function renderTerrain(){
-let horizon=H*0.38;
-let focal=H*smoothFov;
-let colStep=W>1200?4:3;
-let skyR=192,skyG2=221,skyB=240; // fog/sky color #c0ddf0
+    // Project world coords to screen via camera rotation + perspective divide
+    function project(wx, wy, wz) {
+      let dx = wx - camX, dy = wy - camY, dz = wz - camZ;
+      let cs = Math.cos(camAngle), sn = Math.sin(camAngle);
+      let rz = dx * sn + dz * cs;
+      let rx = dx * cs - dz * sn;
+      if (rz < 0.3) rz = 0.3;
+      let focal = H * smoothFov;
+      let horizon = H * 0.38;
+      let sx = W / 2 + rx * focal / rz + shakeX;
+      let sy = horizon - dy * focal / rz + shakeY;
+      let sc = focal / rz;
+      return { x: sx, y: sy, s: sc, z: rz };
+    }
 
-for(let col=0;col<W;col+=colStep){
-let screenX=(col-W/2)/focal;
-let rayAng=camAngle+Math.atan(screenX);
-let rayDx=Math.sin(rayAng);
-let rayDz=Math.cos(rayAng);
-let maxY=H;
-let dist=1.0;
-let perpCos=Math.cos(Math.atan(screenX));
+    // === 1. SOURCE OF TRUTH: Height function ===
+    function getHeight(x, z) {
+      return (Math.sin(z * 0.018) * 40 + Math.sin(z * 0.046) * 20 + Math.sin(z * 0.102) * 10
+        + Math.sin(z * 0.2) * 8 + Math.sin(x * 0.08 + z * 0.024) * 5) * 0.25 - z * 0.04;
+    }
 
-for(let step=0;step<130;step++){
-let wx=camX+rayDx*dist;
-let wz=camZ+rayDz*dist;
-let h=getHeight(wx,wz);
-let perpDist=dist*perpCos;
-let screenY=horizon+(camY-h)*focal/perpDist+shakeY;
+    // Visual curvature (lateral path bending for aesthetics)
+    function curvature(z) { return Math.sin(z * 0.013) * 5 + Math.sin(z * 0.029) * 3 + Math.sin(z * 0.067) * 1.5 }
+    function terrainType(i) { let v = Math.sin(i * 0.037) * 0.5 + 0.5; if (i > 500) v += 0.15; if (i > 1500) v += 0.15; return v < 0.25 ? 0 : v < 0.6 ? 1 : v < 0.8 ? 2 : 3 }
 
-if(screenY<maxY){
-// Snow color based on height relative to player
-let t=1-Math.max(0,Math.min(1,(h-pY+8)/16));
-let baseR=90+t*160;
-let baseG=95+t*155;
-let baseB=110+t*140;
+    // Column raycaster terrain renderer
+    function renderTerrain() {
+      let horizon = H * 0.38;
+      let focal = H * smoothFov;
+      let colStep = W > 1200 ? 4 : 3;
+      let skyR = dPh.fog[0], skyG2 = dPh.fog[1], skyB = dPh.fog[2];
 
-// Slope shading via height offset sampling
-let hFwd=getHeight(wx+rayDx*0.5,wz+rayDz*0.5);
-let slopeDh=hFwd-h;
-if(slopeDh>0.03){let sh=Math.min(0.45,slopeDh*0.8);baseR+=sh*90;baseG+=sh*85;baseB+=sh*50;}
-else if(slopeDh<-0.03){let sh=Math.min(0.45,-slopeDh*0.8);baseR-=sh*70;baseG-=sh*60;baseB+=sh*30;}
+      // Reset silhouette buffer (Y position and depth of topmost terrain pixel)
+      terrainSil = new Array(W).fill(H);
+      terrainSilD = new Array(W).fill(999);
 
-// Distance fog blending
-let fogT=Math.min(1,dist*dist*0.0004);
-let r=baseR*(1-fogT)+skyR*fogT;
-let gv=baseG*(1-fogT)+skyG2*fogT;
-let b=baseB*(1-fogT)+skyB*fogT;
+      for (let col = 0; col < W; col += colStep) {
+        let screenX = (col - W / 2) / focal;
+        let rayAng = camAngle + Math.atan(screenX);
+        let rayDx = Math.sin(rayAng);
+        let rayDz = Math.cos(rayAng);
+        let maxY = H;
+        let dist = 1.0;
+        let silDist = 999;
+        let perpCos = Math.cos(Math.atan(screenX));
 
-g.fillStyle=`rgb(${r|0},${gv|0},${b|0})`;
-g.fillRect(col,screenY|0,colStep,maxY-screenY+1);
-maxY=screenY;
-}
+        for (let step = 0; step < 130; step++) {
+          let wx = camX + rayDx * dist;
+          let wz = camZ + rayDz * dist;
+          let h = getHeight(wx, wz);
+          let perpDist = dist * perpCos;
+          let screenY = horizon + (camY - h) * focal / perpDist + shakeY;
 
-if(maxY<=0)break;
-dist+=0.3+dist*0.012;
-if(dist>50)break;
-}
-}
-}
+          if (screenY < maxY) {
+            // Snow color based on height relative to player
+            let t = 1 - Math.max(0, Math.min(1, (h - pY + 8) / 16));
+            let baseR = dPh.sB[0] + t * dPh.sR[0];
+            let baseG = dPh.sB[1] + t * dPh.sR[1];
+            let baseB = dPh.sB[2] + t * dPh.sR[2];
 
+            // Slope shading via height offset sampling
+            let hFwd = getHeight(wx + rayDx * 0.5, wz + rayDz * 0.5);
+            let slopeDh = hFwd - h;
+            if (slopeDh > 0.03) { let sh = Math.min(0.45, slopeDh * 0.8); baseR += sh * 80; baseG += sh * 60; baseB += sh * 30; }
+            else if (slopeDh < -0.03) { let sh = Math.min(0.45, -slopeDh * 0.8); baseR -= sh * 50; baseG -= sh * 50; baseB -= sh * 20; }
+            // Directional sun lighting — sun from the right
+            let hLeft = getHeight(wx - 0.4, wz);
+            let hRight = getHeight(wx + 0.4, wz);
+            let crossSlope = (hRight - hLeft) * 1.5;
+            if (crossSlope > 0) { let sun = Math.min(0.5, crossSlope * 0.6) * dPh.sunStr; baseR += sun * 60; baseG += sun * 35; baseB -= sun * 10; }
+            else { let shd = Math.min(0.45, -crossSlope * 0.5) * dPh.sunStr; baseR -= shd * 40; baseG -= shd * 35; baseB += shd * 10; }
 
-// Mountain range with optional snow caps
-function drawMtn(by,h,s,c,ox,sc,sn){
-g.fillStyle=c;g.beginPath();g.moveTo(-20,H);
-for(let i=-20;i<=W+20;i+=6){
-let w=i+ox,m=Math.sin(w*.005+s)*h*.4+Math.sin(w*.013+s*2.3)*h*.35+Math.sin(w*.027+s*4.7)*h*.25;
-g.lineTo(i,by-m);
-}
-g.lineTo(W+20,H);g.closePath();g.fill();
-if(sc){
-g.fillStyle=sc;g.beginPath();
-let sl=h*(sn||.45);
-g.moveTo(-20,by-sl);
-for(let i=-20;i<=W+20;i+=6){
-let w=i+ox,slv=sl+Math.sin(w*.05+s*2)*h*.04;
-let m=Math.sin(w*.005+s)*h*.4+Math.sin(w*.013+s*2.3)*h*.35+Math.sin(w*.027+s*4.7)*h*.25;
-g.lineTo(i,m>slv?by-m:by-sl);
-}
-g.lineTo(W+20,by-sl);g.closePath();g.fill();
-}
-}
+            // Distance fog blending
+            let fogT = Math.min(1, dist * dist * 0.0004);
+            let r = baseR * (1 - fogT) + skyR * fogT;
+            let gv = baseG * (1 - fogT) + skyG2 * fogT;
+            let b = baseB * (1 - fogT) + skyB * fogT;
 
-// === 4. RENDERING: Project world from camera perspective ===
-function render(){
-// Full-screen sky gradient
-let skyG=g.createLinearGradient(0,0,0,H);
-skyG.addColorStop(0,'#3a7fb7');
-skyG.addColorStop(0.3,'#7ab8e0');
-skyG.addColorStop(0.55,'#c0ddf0');
-skyG.addColorStop(1,'#e0e8f0');
-g.fillStyle=skyG;
-g.fillRect(0,0,W,H);
+            g.fillStyle = `rgb(${r | 0},${gv | 0},${b | 0})`;
+            g.fillRect(col, screenY | 0, colStep, maxY - screenY + 1);
+            maxY = screenY;
+            silDist = dist;
+          }
 
-// Sun
-let sunX=W*0.75,sunY=H*0.12;
-let sunG=g.createRadialGradient(sunX,sunY,5,sunX,sunY,H*0.13);
-sunG.addColorStop(0,'rgba(255,255,230,0.9)');
-sunG.addColorStop(0.15,'rgba(255,250,200,0.5)');
-sunG.addColorStop(0.5,'rgba(255,240,180,0.15)');
-sunG.addColorStop(1,'rgba(255,240,180,0)');
-g.fillStyle=sunG;
-g.beginPath();g.arc(sunX,sunY,H*0.13,0,PI*2);g.fill();
-g.fillStyle='#fffde8';
-g.beginPath();g.arc(sunX,sunY,10,0,PI*2);g.fill();
+          if (maxY <= 0) break;
+          dist += 0.3 + dist * 0.012;
+          if (dist > 50) break;
+        }
 
-// Mountain ranges with parallax (far to near, each fills to screen bottom)
-let px=-camAngle*W*0.6,fz=camZ*0.05;
-drawMtn(H*0.22,100,0.5,'#b0c0d4',-px*0.15+fz*0.2,'#e8eef4',.2);
-drawMtn(H*0.30,85,1.7,'#9aabbd',-px*0.35+fz*0.4,'#d0dce8',.35);
-drawMtn(H*0.38,65,3.1,'#8494a8',-px*0.7+fz*1,'#c0cad6',.25);
-drawMtn(H*0.45,50,5.3,'#7080a0',-px*1.2+fz*1.5);
+        // Store silhouette for this column range (Y and depth of topmost terrain)
+        let silY = maxY | 0;
+        for (let cc = col; cc < col + colStep && cc < W; cc++) {
+          terrainSil[cc] = silY;
+          terrainSilD[cc] = silDist;
+        }
+      }
+    }
 
-// 3D column raycaster terrain
-renderTerrain();
+    // Mountain range with optional snow caps
+    function drawMtn(by, h, s, c, ox, sc, sn) {
+      g.fillStyle = c; g.beginPath(); g.moveTo(-20, H);
+      for (let i = -20; i <= W + 20; i += 6) {
+        let w = i + ox, m = Math.sin(w * .005 + s) * h * .4 + Math.sin(w * .013 + s * 2.3) * h * .35 + Math.sin(w * .027 + s * 4.7) * h * .25;
+        g.lineTo(i, by - m);
+      }
+      g.lineTo(W + 20, H); g.closePath(); g.fill();
+      if (sc) {
+        g.fillStyle = sc; g.beginPath();
+        let sl = h * (sn || .45);
+        g.moveTo(-20, by - sl);
+        for (let i = -20; i <= W + 20; i += 6) {
+          let w = i + ox, slv = sl + Math.sin(w * .05 + s * 2) * h * .04;
+          let m = Math.sin(w * .005 + s) * h * .4 + Math.sin(w * .013 + s * 2.3) * h * .35 + Math.sin(w * .027 + s * 4.7) * h * .25;
+          g.lineTo(i, m > slv ? by - m : by - sl);
+        }
+        g.lineTo(W + 20, by - sl); g.closePath(); g.fill();
+      }
+    }
 
-if(speed>=13&&state==1){
-let spdF=10+(speed-13)*14/17;
-let n=spdF|0;
-for(let i=0;i<n;i++){
-let a=Math.random()*PI*2;
-let r1=W*0.25+Math.random()*W*0.15;
-let r2=r1+40+(accelVal+spdF)*60;
-let dx=Math.cos(a),dy=Math.sin(a)*0.6;
-g.strokeStyle=`rgba(255,255,255,${Math.min(0.5,0.3+(spdF-10)*0.2/14)})`;
-g.lineWidth=0.8+Math.random()*1.5;
-g.beginPath();
-g.moveTo(pScrX+dx*r1,pScrY+dy*r1);
-g.lineTo(pScrX+dx*r2,pScrY+dy*r2);
-g.stroke();
-}}
+    // === 4. RENDERING: Project world from camera perspective ===
+    function render() {
+      // Full-screen sky gradient (dynamic day cycle)
+      let skyGr = g.createLinearGradient(0, 0, 0, H);
+      let skyStops = [0, 0.2, 0.4, 0.6, 0.8, 1];
+      for (let i = 0; i < 6; i++) { let c = dPh.sky[i]; skyGr.addColorStop(skyStops[i], `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`); }
+      g.fillStyle = skyGr;
+      g.fillRect(0, 0, W, H);
 
+      // Stars (fade in at dusk, visible at night, fade out at dawn)
+      let starA = Math.max(0, Math.min(1, (0.3 - dPh.sunA) / 0.25));
+      if (starA > 0.01) {
+        for (let i = 0; i < 90; i++) {
+          let sx = ((i * 2654435761 + 7) >>> 0) % W;
+          let sy = ((i * 2246822519 + 13) >>> 0) % (H * 0.42);
+          let sz = 1 + (((i * 1013904223) >>> 0) % 3) * 0.5;
+          let twinkle = Math.sin(performance.now() * 0.001 + i * 2.3) * 0.3 + 0.7;
+          g.fillStyle = `rgba(255,255,240,${(starA * twinkle * 0.85).toFixed(2)})`;
+          g.fillRect(sx, sy, sz, sz);
+        }
+      }
 
-// === 5. RENDER BOBSLED TEAM ===
-let pp=project(pX,pY,pZ);
-if(pp.z>0.3){
-pScrX=pp.x;pScrY=pp.y;
-let pSc=pScrSc=18/pp.z;
-let ph=pZ*4;
-// Dog lateral offset from steering
-let dogSteer=turnRate*0.5;
-// Lead dogs (4 units ahead on terrain)
-let lXw=pX+dogSteer;
-let lp=project(lXw,getHeight(lXw,pZ+4),pZ+4);
-let lS=27/lp.z;
-// Wheel dogs (2 units ahead)
-let wXw=pX+dogSteer*0.6;
-let wp=project(wXw,getHeight(wXw,pZ+2),pZ+2);
-let wS=27/wp.z;
-// Dog screen positions (tighter spread)
-let ldLx=lp.x-8*lS,ldRx=lp.x+8*lS;
-let wdLx=wp.x-6*wS,wdRx=wp.x+6*wS;
-// Lateral slope offset: positive slope = left dogs lower, right dogs higher
-let lsOff=lateralSlope*50;
-// Draw far to near: lead, wheel, harness, sled
-drawDog(ldLx,lp.y+lsOff,lS,ph);
-drawDog(ldRx,lp.y-lsOff,lS,ph+PI*.5);
-drawDog(wdLx,wp.y+lsOff,wS,ph+PI);
-drawDog(wdRx,wp.y-lsOff,wS,ph+PI*1.5);
-// Harness: lead dogs to wheel dogs
-g.strokeStyle='#654';g.lineWidth=1;
-g.beginPath();g.moveTo(ldLx,lp.y-5*lS);g.lineTo(wdLx,wp.y-5*wS);g.stroke();
-g.beginPath();g.moveTo(ldRx,lp.y-5*lS);g.lineTo(wdRx,wp.y-5*wS);g.stroke();
-// Harness: wheel dogs to sled
-g.beginPath();g.moveTo(wdLx,wp.y-5*wS);g.lineTo(pScrX-3*pSc,pScrY-2*pSc);g.stroke();
-g.beginPath();g.moveTo(wdRx,wp.y-5*wS);g.lineTo(pScrX+3*pSc,pScrY-2*pSc);g.stroke();
-drawSled(pScrX,pScrY,pSc);
-}
+      // Sun / moon
+      let sunX = W * 0.78, sunYp = H * dPh.sunY;
+      if (dPh.sunA > 0.02) {
+        let sunH2 = g.createRadialGradient(sunX, sunYp, 0, sunX, sunYp, H * 0.35);
+        sunH2.addColorStop(0, `rgba(255,200,80,${dPh.sunA.toFixed(2)})`);
+        sunH2.addColorStop(0.3, `rgba(255,160,60,${(dPh.sunA * 0.375).toFixed(2)})`);
+        sunH2.addColorStop(0.7, `rgba(255,120,40,${(dPh.sunA * 0.125).toFixed(2)})`);
+        sunH2.addColorStop(1, 'rgba(255,100,30,0)');
+        g.fillStyle = sunH2;
+        g.beginPath(); g.arc(sunX, sunYp, H * 0.35, 0, PI * 2); g.fill();
+        let sIG = g.createRadialGradient(sunX, sunYp, 3, sunX, sunYp, H * 0.1);
+        sIG.addColorStop(0, `rgba(255,250,200,${Math.min(0.95, dPh.sunA * 2.4).toFixed(2)})`);
+        sIG.addColorStop(0.2, `rgba(255,220,140,${Math.min(0.7, dPh.sunA * 1.75).toFixed(2)})`);
+        sIG.addColorStop(0.6, `rgba(255,180,80,${Math.min(0.2, dPh.sunA * 0.5).toFixed(2)})`);
+        sIG.addColorStop(1, 'rgba(255,150,60,0)');
+        g.fillStyle = sIG;
+        g.beginPath(); g.arc(sunX, sunYp, H * 0.1, 0, PI * 2); g.fill();
+        g.fillStyle = `rgba(255,240,192,${Math.min(1, dPh.sunA * 2.5).toFixed(2)})`;
+        g.beginPath(); g.arc(sunX, sunYp, 11, 0, PI * 2); g.fill();
+      }
 
-// Particles
-for(let i=particles.length-1;i>=0;i--){
-let p=particles[i];
-p.x+=p.vx;p.y+=p.vy;p.vy+=0.1;p.life--;
-g.fillStyle=`rgba(255,255,255,${p.life/p.ml})`;
-g.fillRect(p.x,p.y,p.sz,p.sz);
-if(p.life<=0)particles.splice(i,1);
-}
-}
+      // Mountain ranges with parallax (derived from fog + base color)
+      let px = -camAngle * W * 0.6, fz = camZ * 0.05;
+      let mc = (r, gv, b) => `rgb(${r|0},${gv|0},${b|0})`;
+      let mL = (d) => [dPh.mtn[0]*(1-d)+dPh.fog[0]*d, dPh.mtn[1]*(1-d)+dPh.fog[1]*d, dPh.mtn[2]*(1-d)+dPh.fog[2]*d];
+      let sL = (d) => { let m = mL(d); return [Math.min(255, m[0]+35), Math.min(255, m[1]+25), Math.min(255, m[2]+15)]; };
+      let m0=mL(.7),m1=mL(.6),m2=mL(.45),m3=mL(.3),s0=sL(.75),s1=sL(.65),s2=sL(.5);
+      drawMtn(H * 0.22, 100, 0.5, mc(...m0), -px * 0.15 + fz * 0.2, mc(...s0), .2);
+      drawMtn(H * 0.30, 85, 1.7, mc(...m1), -px * 0.35 + fz * 0.4, mc(...s1), .35);
+      drawMtn(H * 0.38, 65, 3.1, mc(...m2), -px * 0.7 + fz * 1, mc(...s2), .25);
+      drawMtn(H * 0.45, 50, 5.3, mc(...m3), -px * 1.2 + fz * 1.5);
 
-// CMU Scotty dog (side-profile, bouncing, turns with steering)
-function drawDog(x,y,sc,ph){
-g.save();g.translate(x,y);g.scale(sc,sc);
-g.rotate(turnRate*0.25);
-let dir=turnRate>0.1?1:turnRate<-0.1?-1:0;
-// Bounce
-let b=Math.abs(Math.sin(ph))*2;
-let by=-b;
-g.fillStyle='#111';
-// Body
-g.fillRect(-3,by-5,7,3);
-// Head
-let hx=dir;
-g.fillRect(-2+hx,by-8,5,3);
-// Snout
-g.fillRect(2+hx,by-7,2,2);
-// Ears
-g.fillRect(-2+hx,by-10,1,2);
-g.fillRect(2+hx,by-10,1,2);
-// Legs (animated trot)
-let la=Math.sin(ph);
-g.fillRect(-2,by-2,1,3+la);
-g.fillRect(2,by-2,1,3-la);
-g.fillRect(-1,by-2,1,2-la);
-g.fillRect(1,by-2,1,2+la);
-// Tail (wagging)
-let wag=Math.sin(ph*1.3);
-g.fillRect(-3+wag,by-7,1,2);
-// Eyes
-g.fillStyle='#fff';
-g.fillRect(hx,by-7,1,1);
-// Tartan scarf (red + green plaid)
-for(let i=0;i<7;i++){
-g.fillStyle=(i%2==0)?'#bb0000':'#006b00';
-g.fillRect(-3+i,by-5,1,1);
-g.fillStyle=(i%2==0)?'#006b00':'#bb0000';
-g.fillRect(-3+i,by-4,1,1);
-}
-g.restore();
-}
+      // Title "DASH" — in front of mountains, behind terrain
+      if (state == 0) {
+        g.textAlign = 'center';
+        g.font = 'bold ' + Math.max(50, S * 0.15 | 0) + 'px monospace';
+        g.fillStyle = 'rgb(255, 100, 0)';
+        snowText('DASH', W / 2, H * 0.38);
+      }
 
-// Sled + rider (rear view)
-function drawSled(x,y,sc){
-let lean=turnRate*0.3;
-g.save();g.translate(x,y);g.scale(sc,sc);g.rotate(lean*0.15-lateralSlope*0.8);
-// Shadow
-g.fillStyle='rgba(0,0,0,0.15)';
-g.beginPath();g.ellipse(0,12,10,3,0,0,PI*2);g.fill();
-// Runners (two vertical lines, splayed)
-g.fillStyle='#654321';
-g.fillRect(-8,4,2,7);g.fillRect(6,4,2,7);
-// Runner blades
-g.fillStyle='#888';
-g.fillRect(-9,10,3,1);g.fillRect(6,10,3,1);
-// Cross bars
-g.fillStyle='#8B4513';
-g.fillRect(-7,5,14,1);g.fillRect(-7,8,14,1);
-// Sled basket back
-g.fillStyle='#a06820';
-g.fillRect(-6,2,12,3);
-// Handlebar
-g.fillStyle='#654321';
-g.fillRect(-7,1,1,4);g.fillRect(6,1,1,4);
-g.fillRect(-7,1,14,1);
-// Rider torso (back view)
-g.fillStyle='#445';g.fillRect(-4,-4,8,6);
-// Shoulders
-g.fillRect(-5,-3,1,2);g.fillRect(4,-3,1,2);
-// Arms gripping handlebar
-g.fillRect(-6,-1,2,3);g.fillRect(4,-1,2,3);
-// Head (back of)
-g.fillStyle='#dba';g.fillRect(-2,-7,4,3);
-// Beanie
-g.fillStyle='#bb0000';g.fillRect(-3,-9,6,2);
-// Pom pom
-g.fillStyle='#fff';g.fillRect(-1,-10,2,1);
-// Scarf trailing
-g.fillStyle='#c49102';g.fillRect(-3,-4,6,1);
-g.restore();
-}
+      // 3D column raycaster terrain
+      renderTerrain();
 
-function spraySnow(){
-for(let i=0;i<3;i++){
-particles.push({
-x:pScrX+(turnRate>0?10:-8)*pScrSc,y:pScrY+9*pScrSc,
-vx:turnRate*3+Math.random()*2-1,
-vy:-Math.random()*3-1,
-life:15+Math.random()*10|0,ml:25,
-sz:2+Math.random()*3
-});
-}
-}
+      // Render obstacles (trees, rocks)
+      if (state == 1 || state == 2) renderObstacles();
 
-function ambientSnow(){
-if(Math.random()<0.3+speed*0.05){
-particles.push({
-x:Math.random()*W,y:-5,
-vx:turnRate*0.5+Math.random()-0.5,
-vy:1+Math.random()*2+speed*0.3,
-life:60+Math.random()*40|0,ml:100,
-sz:1+Math.random()*2
-});
-}
-}
-
-function update(dt){
-if(state!=1)return;
-if(dt>0.1)dt=0.1;
-
-// === 2. PLAYER POSITIONING: Snap to ground ===
-// Slope: negative=downhill (fast), positive=uphill (slow)
-slopeVal=getHeight(pX,pZ+2)-getHeight(pX,pZ-2);
-lateralSlope=(getHeight(pX+2,pZ)-getHeight(pX-2,pZ))/4;
-let slope=slopeVal<0?-slopeVal*0.12:-slopeVal*0.02;
-
-let tt=terrainType(Math.floor(pZ));
-let friction=tt==0?0.015:tt==1?0.025:tt==2?0.008:0.02;
-let gravity=9.8*slope;
-let turnDrag=Math.abs(turnRate)*0.08;
-let dragMult=inputTuck?0.6:1;
-let airDrag=speed*speed*0.001*dragMult;
-
-speed+=gravity*dt;
-speed-=(friction+turnDrag)*speed*dt;
-speed-=airDrag*dt;
-if(slopeVal>0)speed-=slopeVal*slopeVal*0.15*dt;
-speed=Math.max(7.5,Math.min(speed,30));
-accelVal=lerp(accelVal,Math.max(0,(speed-prevSpd)/dt),Math.min(1,dt*10));
-prevSpd=speed;
-
-// Steering
-let curv=curvature(pZ)*0.002;
-turnRate+=(inputX*1.0-turnRate)*dt*4;
-pX+=turnRate*dt*0.5;
-pX+=curv*speed*dt*0.1;
-
-// Move forward
-pZ+=speed*dt*0.5;
-
-// Snap player Y to ground height
-pY=getHeight(pX,pZ);
+      // Speed streaks (from player)
+      if (speed >= 18 && state == 1) {
+        let spdF = 10 + (speed - 13) * 14 / 17;
+        let n = spdF | 0;
+        for (let i = 0; i < n; i++) {
+          let a = Math.random() * PI * 2;
+          let r1 = W * 0.25 + Math.random() * W * 0.15;
+          let r2 = r1 + 40 + (accelVal + spdF) * 60;
+          let dx = Math.cos(a), dy = Math.sin(a) * 0.6;
+          g.strokeStyle = `rgba(255,230,180,${Math.min(0.5, 0.3 + (spdF - 10) * 0.2 / 14)})`;
+          g.lineWidth = 1 + Math.random() * 1.5;
+          g.beginPath();
+          g.moveTo(pScrX + dx * r1, pScrY + dy * r1);
+          g.lineTo(pScrX + dx * r2, pScrY + dy * r2);
+          g.stroke();
+        }
+      }
 
 
-// Score
-score+=speed*dt*2;
+      // === SNOW TRACKS under sled runners (from recorded history) ===
+      if (trailHist.length > 2) {
+        let trackW = 0.025;
+        let segSize = 4; // points per segment for gradient chunks
+        let totalSegs = Math.ceil(trailHist.length / segSize);
+        for (let r = 0; r < 2; r++) {
+          for (let seg = 0; seg < totalSegs; seg++) {
+            let i0 = seg * segSize;
+            let i1 = Math.min(i0 + segSize, trailHist.length - 1);
+            if (i0 >= trailHist.length - 1) break;
+            // Fade: front segments (low index) are more transparent
+            let fadeT = i0 / trailHist.length;
+            let alpha = 0.3 * Math.max(0.3, Math.min(1, fadeT * 4)); // ramps but never below 0.09
+            g.beginPath();
+            let started = false;
+            // Left edge forward
+            for (let i = i0; i <= i1; i++) {
+              let h = trailHist[i];
+              let tx = r === 0 ? h.lx : h.rx;
+              let tz = r === 0 ? h.lz : h.rz;
+              let ty = getHeight(tx, tz);
+              let tp = project(tx - trackW, ty, tz);
+              if (tp.z < 0.5 || tp.z > 45) continue;
+              if (!started) { g.moveTo(tp.x, tp.y); started = true; }
+              else g.lineTo(tp.x, tp.y);
+            }
+            // Right edge backward
+            for (let i = i1; i >= i0; i--) {
+              let h = trailHist[i];
+              let tx = r === 0 ? h.lx : h.rx;
+              let tz = r === 0 ? h.lz : h.rz;
+              let ty = getHeight(tx, tz);
+              let tp = project(tx + trackW, ty, tz);
+              if (tp.z < 0.5 || tp.z > 45) continue;
+              g.lineTo(tp.x, tp.y);
+            }
+            g.closePath();
+            g.fillStyle = `rgba(30,35,50,${alpha.toFixed(3)})`;
+            g.fill();
+          }
+          // Rounded cap at trail front
+          if (trailHist.length > 0) {
+            let h0 = trailHist[0];
+            let tx = r === 0 ? h0.lx : h0.rx;
+            let tz = r === 0 ? h0.lz : h0.rz;
+            let ty = getHeight(tx, tz);
+            let tp = project(tx, ty, tz);
+            if (tp.z > 0.5 && tp.z < 45) {
+              let rad = trackW * tp.s * 0.8;
+              if (rad > 0.5) {
+                g.beginPath();
+                g.arc(tp.x, tp.y, rad, 0, PI * 2);
+                g.fillStyle = 'rgba(30,35,50,0.05)';
+                g.fill();
+              }
+            }
+          }
+        }
+      }
 
-// === 3. CAMERA LOGIC: Spring arm with lerp ===
-smoothFov=lerp(smoothFov,0.65+slopeVal*0.07,Math.min(1,dt*3));
-let t=Math.min(1,dt*5);
-let dh=Math.min(2.5,Math.max(0,-slopeVal));
-camX=lerp(camX,pX,t);
-camY=lerp(camY,pY+2+dh*1.2,Math.min(1,dt*8));
-camZ=lerp(camZ,pZ-3-dh*0.6,t);
-// Camera yaw: look toward a point ahead of the player
-camAngle=Math.atan2(pX-camX,pZ+4-camZ);
+      // === 5. RENDER BOBSLED TEAM ===
+      let pp = project(pX, pY, pZ);
+      if (pp.z > 0.3) {
+        pScrX = pp.x; pScrY = pp.y;
+        let pSc = pScrSc = S * 0.024 / pp.z;
+        let ph = pZ * 4;
+        // Dog lateral offset from steering (smoothed)
+        // Lead dogs — swing out wider on turns
+        let lXw = pX + dogTurn * 1.2;
+        let lp = project(lXw, getHeight(lXw, pZ + 2), pZ + 2);
+        let lS = S * 0.036 / lp.z;
+        // Wheel dogs — moderate swing
+        let wXw = pX + dogTurn * 0.5;
+        let wp = project(wXw, getHeight(wXw, pZ + 1), pZ + 1);
+        let wS = S * 0.036 / wp.z;
+        // Dog screen positions (tighter spread)
+        let ldLx = lp.x - 8 * lS, ldRx = lp.x + 8 * lS;
+        let wdLx = wp.x - 6 * wS, wdRx = wp.x + 6 * wS;
+        // Lateral slope offset: positive slope = left dogs lower, right dogs higher
+        let lsOff = lateralSlope * 50;
+        // Draw far to near: lead, wheel, harness, sled
+        drawDog(ldLx, lp.y + lsOff, lS, ph);
+        drawDog(ldRx, lp.y - lsOff, lS, ph + PI * .5);
+        drawDog(wdLx, wp.y + lsOff, wS, ph + PI);
+        drawDog(wdRx, wp.y - lsOff, wS, ph + PI * 1.5);
+        // Dog foot snow puffs
+        if (state == 1 && speed > 5) {
+          let dogs = [
+            { x: ldLx, y: lp.y + lsOff, s: lS, p: ph },
+            { x: ldRx, y: lp.y - lsOff, s: lS, p: ph + PI * .5 },
+            { x: wdLx, y: wp.y + lsOff, s: wS, p: ph + PI },
+            { x: wdRx, y: wp.y - lsOff, s: wS, p: ph + PI * 1.5 }
+          ];
+          for (let d of dogs) {
+            // Spawn on leg strike (when sin crosses zero going down)
+            if (Math.sin(d.p) > 0.5 && Math.random() < 0.6) {
+              particles.push({
+                x: d.x + (Math.random() * 4 - 2) * d.s,
+                y: d.y + 2 * d.s,
+                vx: (Math.random() - 0.5) * 2,
+                vy: -Math.random() * 1.8 - 0.5,
+                life: 14 + Math.random() * 10 | 0, ml: 24,
+                sz: 2 + Math.random() * 2.5
+              });
+            }
+          }
+        }
+        // Harness: lead dogs to wheel dogs
+        g.strokeStyle = '#654'; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(ldLx, lp.y - 5 * lS); g.lineTo(wdLx, wp.y - 5 * wS); g.stroke();
+        g.beginPath(); g.moveTo(ldRx, lp.y - 5 * lS); g.lineTo(wdRx, wp.y - 5 * wS); g.stroke();
+        // Harness: wheel dogs to sled
+        g.beginPath(); g.moveTo(wdLx, wp.y - 5 * wS); g.lineTo(pScrX - 3 * pSc, pScrY - 2 * pSc); g.stroke();
+        g.beginPath(); g.moveTo(wdRx, wp.y - 5 * wS); g.lineTo(pScrX + 3 * pSc, pScrY - 2 * pSc); g.stroke();
+        drawSled(pScrX, pScrY, pSc);
+      }
 
-// Snow effects
-if(Math.abs(turnRate)>0.5&&speed>3){
-spraySnow();
-if(Math.random()<0.05)playBuf(sndCarve);
-}
-ambientSnow();
+      // Particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        let p = particles[i];
+        p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--;
+        g.fillStyle = `rgba(255,230,190,${p.life / p.ml})`;
+        g.fillRect(p.x, p.y, p.sz, p.sz);
+        if (p.life <= 0) particles.splice(i, 1);
+      }
 
-// Shake decay
-shakeX*=0.85;shakeY*=0.85;
-if(Math.abs(shakeX)<0.5)shakeX=0;
-if(Math.abs(shakeY)<0.5)shakeY=0;
-}
+      // Glow overlay (dynamic)
+      if (dPh.glow > 0.005) {
+        let glowG = g.createRadialGradient(W * 0.78, H * dPh.sunY, 0, W * 0.78, H * dPh.sunY, W * 0.6);
+        glowG.addColorStop(0, `rgba(255,160,40,${dPh.glow.toFixed(3)})`);
+        glowG.addColorStop(0.5, `rgba(255,120,20,${(dPh.glow * 0.5).toFixed(3)})`);
+        glowG.addColorStop(1, 'rgba(255,80,10,0)');
+        g.fillStyle = glowG;
+        g.fillRect(0, 0, W, H);
+      }
+    }
 
-function drawHUD(){
-if(state!=1)return;
-let fs=Math.max(14,W*0.04|0);
-g.textAlign='left';
-g.font='bold '+fs+'px monospace';
-g.fillStyle='#fff';
-g.fillText('Score: '+Math.floor(score),10,fs+5);
-g.fillText('Speed: '+speed.toFixed(1),10,fs*2+10);
-if(combo>1){
-g.fillStyle='#ff0';
-g.fillText('Combo x'+combo+'!',10,fs*3+15);
-}
-// Elevation indicator (right side)
-g.save();
-g.translate(W-45,fs*1.5);
-let sa=Math.atan2(slopeVal,4);
-g.rotate(sa);
-g.fillStyle=slopeVal<-0.3?'#4f8':slopeVal>0.3?'#f84':'#aaa';
-g.beginPath();g.moveTo(18,0);g.lineTo(-8,-7);g.lineTo(-4,0);g.lineTo(-8,7);
-g.closePath();g.fill();
-g.restore();
-g.textAlign='right';
-g.fillStyle='#ccc';
-g.font=Math.max(11,W*0.03|0)+'px monospace';
-g.fillText((2000+Math.floor(pY*10))+'m',W-10,fs*3);
-}
+    // CMU Scotty dog (side-profile, bouncing, turns with steering)
+    function drawDog(x, y, sc, ph) {
+      g.save(); g.translate(x, y); g.scale(sc, sc);
+      g.rotate(turnRate * 0.12);
+      let dir = turnRate > 0.1 ? 1 : turnRate < -0.1 ? -1 : 0;
+      // Bounce
+      let b = Math.abs(Math.sin(ph)) * 2;
+      let by = -b;
+      g.fillStyle = '#111';
+      // Body
+      g.fillRect(-3, by - 5, 7, 3);
+      // Head
+      let hx = dir;
+      g.fillRect(-2 + hx, by - 8, 5, 3);
+      // Snout
+      g.fillRect(2 + hx, by - 7, 2, 2);
+      // Ears
+      g.fillRect(-2 + hx, by - 10, 1, 2);
+      g.fillRect(2 + hx, by - 10, 1, 2);
+      // Legs (animated trot)
+      let la = Math.sin(ph);
+      g.fillRect(-2, by - 2, 1, 3 + la);
+      g.fillRect(2, by - 2, 1, 3 - la);
+      g.fillRect(-1, by - 2, 1, 2 - la);
+      g.fillRect(1, by - 2, 1, 2 + la);
+      // Tail (wagging)
+      let wag = Math.sin(ph * 1.3);
+      g.fillRect(-3 + wag, by - 7, 1, 2);
+      // Eyes
+      g.fillStyle = '#fff';
+      g.fillRect(hx, by - 7, 1, 1);
+      // Tartan scarf (red + green plaid)
+      for (let i = 0; i < 7; i++) {
+        g.fillStyle = (i % 2 == 0) ? '#bb0000' : '#006b00';
+        g.fillRect(-3 + i, by - 5, 1, 1);
+        g.fillStyle = (i % 2 == 0) ? '#006b00' : '#bb0000';
+        g.fillRect(-3 + i, by - 4, 1, 1);
+      }
+      g.restore();
+    }
 
-function drawTitle(){
-g.textAlign='center';
+    // Sled + rider (rear view)
+    function drawSled(x, y, sc) {
+      let lean = turnRate * 0.3;
+      let slideX = lean * 6; // lateral slide when turning
+      g.save(); g.translate(x + slideX * sc, y); g.scale(sc, sc); g.rotate(lean * 0.4 - lateralSlope * 0.8);
+      // Shadow
+      g.fillStyle = 'rgba(0,0,0,0.15)';
+      g.beginPath(); g.ellipse(0, 12, 10, 3, 0, 0, PI * 2); g.fill();
+      // Runner height offset — inner runner dips, outer lifts when turning
+      let rLift = lean * 3;
+      // Runners (two vertical lines, splayed)
+      g.fillStyle = '#654321';
+      g.fillRect(-8, 4 + rLift, 2, 7 - rLift); g.fillRect(6, 4 - rLift, 2, 7 + rLift);
+      // Runner blades
+      g.fillStyle = '#888';
+      g.fillRect(-9, 10, 3, 1); g.fillRect(6, 10, 3, 1);
+      // Cross bars
+      g.fillStyle = '#8B4513';
+      g.fillRect(-7, 5, 14, 1); g.fillRect(-7, 8, 14, 1);
+      // Sled basket back
+      g.fillStyle = '#a06820';
+      g.fillRect(-6, 2, 12, 3);
+      // Handlebar
+      g.fillStyle = '#654321';
+      g.fillRect(-7, 1, 1, 4); g.fillRect(6, 1, 1, 4);
+      g.fillRect(-7, 1, 14, 1);
+      // Rider torso (back view) — leans into turn
+      let riderLean = lean * 4;
+      g.fillStyle = '#445'; g.fillRect(-4 + riderLean, -4, 8, 6);
+      // Shoulders
+      g.fillRect(-5 + riderLean, -3, 1, 2); g.fillRect(4 + riderLean, -3, 1, 2);
+      // Arms gripping handlebar — inner arm extends, outer arm tucks
+      g.fillRect(-6, -1, 2, 3); g.fillRect(4, -1, 2, 3);
+      // Head (back of) — follows rider lean
+      g.fillStyle = '#dba'; g.fillRect(-2 + riderLean, -7, 4, 3);
+      // Beanie
+      g.fillStyle = '#bb0000'; g.fillRect(-3 + riderLean, -9, 6, 2);
+      // Pom pom
+      g.fillStyle = '#fff'; g.fillRect(-1 + riderLean, -10, 2, 1);
+      // Scarf trailing
+      g.fillStyle = '#c49102'; g.fillRect(-3, -4, 6, 1);
+      g.restore();
+    }
 
-// Draw "Scotty's" first (background layer)
-g.font='bold '+Math.max(36,W*0.1|0)+'px monospace'; // Original font for Scotty's
-g.fillStyle='rgb(255, 255, 200)'; // Light yellow for Scotty's
-g.fillText("Scotty's",W/2 - (W * 0.07),H*0.35); // Position more to the left and higher
+    function spraySnow() {
+      for (let i = 0; i < 3; i++) {
+        particles.push({
+          x: 5 + pScrX + (turnRate > 0 ? 7 : -9) * pScrSc, y: pScrY + 10 * pScrSc,
+          vx: turnRate * 3 + Math.random() * 2 - 1,
+          vy: -Math.random() * 3 - 1,
+          life: 15 + Math.random() * 10 | 0, ml: 25,
+          sz: 2 + Math.random() * 3
+        });
+      }
+    }
 
-// Draw "DASH" second (foreground layer), slightly lower and to the right
-g.font='bold '+Math.max(50,W*0.15|0)+'px monospace'; // Larger font for DASH
-g.fillStyle='rgb(255, 100, 0)'; // Sunset color for DASH
-g.fillText('DASH',W/2 + (W * 0.02),H*0.38); // Position lower, so its top is partially visible above horizon (H*0.38)
+    function runnerSpray() {
+      // Snow spray from each sled runner blade, rotated with sled tilt
+      let ang = turnRate * 0.3 * 0.15 - lateralSlope * 0.8;
+      let cs = Math.cos(ang), sn = Math.sin(ang);
+      // Left runner blade local pos (-8, 11), right (7, 11)
+      let llx = -8 * cs - 11 * sn, lly = -8 * sn + 11 * cs;
+      let rlx = 7 * cs - 11 * sn, rly = 7 * sn + 11 * cs;
+      let lx = pScrX + llx * pScrSc, rx = pScrX + rlx * pScrSc;
+      let lby = pScrY + lly * pScrSc, rby = pScrY + rly * pScrSc;
+      let n = 1 + (speed / 15 | 0);
+      for (let i = 0; i < n; i++) {
+        // Left runner
+        particles.push({
+          x: lx + Math.random() * 3 - 1, y: lby + Math.random() * 2,
+          vx: -0.8 - Math.random() * 1 + turnRate * 0.3,
+          vy: -Math.random() * 1.5 - 0.3,
+          life: 10 + Math.random() * 8 | 0, ml: 18,
+          sz: 1.5 + Math.random() * 2.5
+        });
+        // Right runner
+        particles.push({
+          x: rx + Math.random() * 3 - 1, y: rby + Math.random() * 2,
+          vx: 0.8 + Math.random() * 1 + turnRate * 0.3,
+          vy: -Math.random() * 1.5 - 0.3,
+          life: 10 + Math.random() * 8 | 0, ml: 18,
+          sz: 1.5 + Math.random() * 2.5
+        });
+      }
+    }
 
-// Original subtitle and instructions remain
-g.font=Math.max(14,W*0.04|0)+'px monospace';
-g.fillStyle='rgba(255,255,255,0.7)';
-// Removed 'Dodge trees...' subtitle.
+    function ambientSnow() {
+      let n = 2 + (speed * 0.25 | 0);
+      for (let i = 0; i < n; i++) {
+        if (Math.random() < 0.6) {
+          // Spawn anywhere on screen, move outward from center like flying into snow
+          let sx = Math.random() * W;
+          let sy = Math.random() * H * 0.7;
+          let dx = sx - W * 0.5, dy = sy - H * 0.38;
+          let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          let spd = 0.4 + Math.random() * 1 + speed * 0.2;
+          let vyBase = (dy / dist) * spd;
+          if (vyBase < 0.2) vyBase = 0.2;
+          particles.push({
+            x: sx, y: sy,
+            vx: (dx / dist) * spd + turnRate * 0.3,
+            vy: vyBase + 0.3,
+            life: 60 + Math.random() * 40 | 0, ml: 100,
+            sz: 1 + Math.random() * 1.5, grow: 1
+          });
+        }
+      }
+    }
 
-// Left side: "Don't be late to class"
-g.save(); // Save current canvas state
-g.translate(W * 0.15, H *0.6); // Move origin to desired text center
-g.rotate(-Math.PI / 6); // Rotate 90 degrees counter-clockwise
-g.textAlign='center'; // Center text on the new origin
-g.fillStyle='rgb(255, 255, 0)'; // Yellow color
-g.font='bold '+Math.max(10, W * 0.025 | 0)+'px monospace'; // Small font
-let message1 = "Don't be late";
-let message2 = "to class!";
-let lineHeight = Math.max(10, W * 0.025 | 0) * 1.2; // Approximate line height based on font size
+    // === OBSTACLE SYSTEM ===
+    // Procedural obstacle placement: uses world-coordinate seeded randomness
+    // so obstacles exist everywhere and are consistent no matter where you go
+    function seedRand(a, b) {
+      // Simple hash to get a deterministic 0-1 from two integers
+      let h = (a * 2654435761 ^ b * 2246822519) & 0x7fffffff;
+      return (h % 10000) / 10000;
+    }
 
-// Draw first line
-g.fillText(message1, 0, -lineHeight / 2); // Center message1 slightly above origin
-// Draw second line
-g.fillText(message2, 0, lineHeight / 2); // Center message2 slightly below origin
-g.restore(); // Restore canvas state
+    function spawnObstacles() {
+      // Small cells = dense obstacles, shrinks further with progression
+      let cellZ = Math.max(3.6, 3 - pZ / 2000);
+      let cellX = Math.max(4.4, 3.5 - pZ / 2000);
+      // Range around player to populate
+      let rangeX = 60; // far left/right of player
+      let rangeZbehind = 10, rangeZahead = 80;
 
-if(Date.now()%1000<600){
-g.fillStyle='#fff';
-g.font='bold '+Math.max(18,W*0.05|0)+'px monospace';
-g.fillText('TAP TO START',W/2,H*0.62);
-}
+      let minCZ = Math.floor((pZ - rangeZbehind) / cellZ);
+      let maxCZ = Math.floor((pZ + rangeZahead) / cellZ);
+      let minCX = Math.floor((pX - rangeX) / cellX);
+      let maxCX = Math.floor((pX + rangeX) / cellX);
 
-if(hiScore>0){
-g.fillStyle='#ff0';
-g.font=Math.max(14,W*0.04|0)+'px monospace';
-g.fillText('Best: '+hiScore,W/2,H*0.72);
-}
+      for (let cz = minCZ; cz <= maxCZ; cz++) {
+        for (let cx = minCX; cx <= maxCX; cx++) {
+          // Unique key for this cell
+          let key = cz * 10000 + cx;
+          // Skip if already spawned
+          if (spawnedCells.has(key)) continue;
+          spawnedCells.add(key);
 
-// Right side: "Touch sides to steer" and "Arrow keys/mouse"
-g.textAlign='right'; // Align text to the right
-g.fillStyle='rgba(255,255,255,0.5)'; // Same color as before
-g.font=Math.max(11,W*0.03|0)+'px monospace'; // Same font size as before
-g.fillText('Touch sides to steer | Bottom = tuck',W * 0.9,H*0.82); // Position to the right
-g.fillText('Arrow keys / mouse on desktop',W * 0.9,H*0.87); // Position to the right
+          // Deterministic random for this cell
+          let r1 = seedRand(cz, cx);
+          let r2 = seedRand(cx * 37, cz * 73);
+          let r3 = seedRand(cz * 113, cx * 191);
 
-// Reset textAlign to center for subsequent elements like TAP TO START
-g.textAlign='center';
-}
+          // Position within cell
+          let oz = cz * cellZ + r2 * cellZ;
+          let ox = cx * cellX + r3 * cellX;
 
-function drawGameOver(){
-g.textAlign='center';
-g.fillStyle='rgba(0,0,0,0.5)';
-g.fillRect(0,H*0.2,W,H*0.6);
-g.fillStyle='#f44';
-g.font='bold '+Math.max(32,W*0.09|0)+'px monospace';
-g.fillText('CRASHED!',W/2,H*0.35);
-g.fillStyle='#fff';
-g.font=Math.max(18,W*0.05|0)+'px monospace';
-g.fillText('Score: '+Math.floor(score),W/2,H*0.47);
-g.fillText('Distance: '+Math.floor(pZ)+'m',W/2,H*0.54);
-if(maxCombo>1)g.fillText('Max Combo: x'+maxCombo,W/2,H*0.61);
-if(Math.floor(score)>=hiScore&&hiScore>0){
-g.fillStyle='#ff0';
-g.fillText('NEW HIGH SCORE!',W/2,H*0.68);
-}
-if(Date.now()%1000<600){
-g.fillStyle='#fff';
-g.font='bold '+Math.max(16,W*0.045|0)+'px monospace';
-g.fillText('TAP TO RETRY',W/2,H*0.78);
-}
-}
+          // Don't spawn near player at game start
+          if (oz < pZ + 30 && oz > pZ - 5 && Math.abs(ox - pX) < 10 && score < 100) continue;
 
-function resetGame(){
-pX=0;pZ=0;
-for(let z=0;z<200;z++){if(getHeight(0,z+2)-getHeight(0,z-2)<-0.3){pZ=z;break;}}
-pY=getHeight(0,pZ);
-speed=7.5;turnRate=0;
-camX=0;camY=pY+2;camZ=pZ-3;camAngle=0;
-score=0;combo=1;maxCombo=1;crashed=0;crashTimer=0;
-particles=[];shakeX=0;shakeY=0;prevSpd=7.5;accelVal=0;smoothFov=0.65;
-}
+          // Density: 50% (0-2000) → 70% (2000-4000) → 90% (4000+)
+          // Obstacles directly ahead always spawn to force weaving
+          let density = pZ < 2000 ? 0.275 : pZ < 4000 ? 0.275 + 0.075 * (pZ - 2000) / 2000 : 0.35 + 0.075 * Math.min(1, (pZ - 4000) / 2000);
+          let dzToPlayer = oz - pZ;
+          let dxToPlayer = Math.abs(ox - pX);
+          let aheadCenter = dzToPlayer > 5 && dzToPlayer < 25 && dxToPlayer < 4;
+          if (!aheadCenter && r1 > density) continue;
 
-let keys={};
-let mouseDown=0,mouseX=0,mouseY=0;
-onkeydown=e=>{keys[e.key]=1;if(state!=1)startOrRetry()};
-onkeyup=e=>{keys[e.key]=0};
+          let type = r2 < 0.32 ? 0 : r2 < 0.48 ? 1 : r2 < 0.6 ? 2 : r2 < 0.72 ? 3 : r2 < 0.82 ? 4 : r2 < 0.92 ? 5 : 6;
+          let scale = 0.6 + seedRand(cz * 7, cx * 13) * 0.8;
+          let variant = seedRand(cz * 31, cx * 59);
+          obstacles.push({ x: ox, z: oz, type, hit: false, scale, variant, key });
+        }
+      }
+    }
 
-function handlePointer(e){
-e.preventDefault();
-let t=e.touches?e.touches[0]:e;
-mouseX=t.clientX;mouseY=t.clientY;
-mouseDown=1;
-}
-c.addEventListener('touchstart',e=>{initAudio();handlePointer(e);if(state!=1)startOrRetry()},{passive:false});
-c.addEventListener('touchmove',e=>{handlePointer(e)},{passive:false});
-c.addEventListener('touchend',e=>{e.preventDefault();mouseDown=0},{passive:false});
-c.addEventListener('mousedown',e=>{initAudio();mouseDown=1;mouseX=e.clientX;mouseY=e.clientY;if(state!=1)startOrRetry()});
-c.addEventListener('mousemove',e=>{if(mouseDown){mouseX=e.clientX;mouseY=e.clientY}});
-c.addEventListener('mouseup',()=>{mouseDown=0});
+    // Track which cells we've already generated
+    let spawnedCells = new Set();
 
-function startOrRetry(){
-if(state==0){state=1;resetGame()}
-else if(state==2&&crashTimer<=0){state=0}
-}
+    // Crossing skiers
+    let skiers = [], nextSkierZ = 50;
 
-function processInput(){
-inputX=0;inputTuck=0;
-if(keys['ArrowLeft']||keys['a'])inputX=-1;
-if(keys['ArrowRight']||keys['d'])inputX=1;
-if(keys['ArrowDown']||keys['s'])inputTuck=1;
-if(mouseDown){
-let rx=(mouseX-W/2)/(W/2);
-inputX=Math.max(-1,Math.min(1,rx*1.5));
-if(mouseY>H*0.7)inputTuck=1;
-}
-}
+    function cleanupObstacles() {
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        let ob = obstacles[i];
+        if (ob.z < pZ - 25 || Math.abs(ob.x - pX) > 80) {
+          spawnedCells.delete(ob.key);
+          obstacles.splice(i, 1);
+        }
+      }
+    }
 
-function frame(t){
-let dt=(t-lastTime)/1000;
-lastTime=t;
-if(dt>0.2)dt=0.016;
+    function updateSkiers(dt) {
+      // Spawn
+      if (pZ > nextSkierZ) {
+        let side = seedRand(Math.floor(pZ), 9999) < 0.5 ? -1 : 1;
+        skiers.push({
+          x: pX + side * (10 + Math.random() * 6), z: pZ + 18 + Math.random() * 12,
+          vx: -side * (3.5 + Math.random() * 2.5), vz: -0.3 + Math.random() * 0.6,
+          ph: Math.random() * PI * 2, active: false, hit: false,
+          variant: Math.random()
+        });
+        nextSkierZ = pZ + 35 + Math.random() * 45;
+      }
+      // Move + cleanup
+      for (let i = skiers.length - 1; i >= 0; i--) {
+        let sk = skiers[i];
+        if (!sk.active && Math.abs(sk.z - pZ) < 30) sk.active = true;
+        if (sk.active) { sk.x += sk.vx * dt; sk.z += sk.vz * dt; sk.ph += dt * 8; }
+        if (sk.z < pZ - 20 || Math.abs(sk.x - pX) > 50) { skiers.splice(i, 1); continue; }
+        // Collision
+        if (!sk.hit && state === 1 && Math.abs(sk.z - pZ) < 0.7 && Math.abs(sk.x - pX) < 0.5) {
+          sk.hit = true; crashed = 1; state = 2; crashTimer = 1.5; playCrashSfx();
+          shakeX = (Math.random() - 0.5) * 20; shakeY = (Math.random() - 0.5) * 15;
+          for (let j = 0; j < 25; j++) {
+            particles.push({ x: pScrX + Math.random() * 20 - 10, y: pScrY + Math.random() * 10 - 5,
+              vx: (Math.random() - 0.5) * 8, vy: -Math.random() * 6 - 2,
+              life: 25 + Math.random() * 20 | 0, ml: 45, sz: 2 + Math.random() * 4 });
+          }
+          let finalDist = Math.floor(pZ);
+          if (finalDist > hiScore) { hiScore = finalDist; try { localStorage.setItem('hs', hiScore) } catch (e) {} }
+        }
+      }
+    }
 
-processInput();
-if(state==1)update(dt);
-if(state==2){crashTimer-=dt;shakeX*=0.9;shakeY*=0.9}
+    function drawCrossingSkier(sx, sy, sc, dir, ph, fogT, variant) {
+      let skyR = dPh.fog[0], skyG = dPh.fog[1], skyB = dPh.fog[2];
+      function fogCol(r, gv, b) {
+        return `rgb(${(r * (1 - fogT) + skyR * fogT) | 0},${(gv * (1 - fogT) + skyG * fogT) | 0},${(b * (1 - fogT) + skyB * fogT) | 0})`;
+      }
+      g.save(); g.translate(sx, sy); g.scale(sc, sc);
+      if (dir < 0) g.scale(-1, 1);
+      let la = Math.sin(ph) * 0.5;
+      // Skis
+      g.fillStyle = fogCol(55, 55, 60); g.fillRect(-6, 1, 13, 1);
+      // Boots
+      g.fillStyle = fogCol(40, 40, 48);
+      g.fillRect(-4 + la, -1, 2, 2); g.fillRect(1 - la, -1, 2, 2);
+      // Legs
+      g.fillStyle = fogCol(35, 35, 45);
+      g.fillRect(-3 + la, -5, 2, 4); g.fillRect(0 - la, -5, 2, 4);
+      // Jacket
+      let jR, jG, jB;
+      if (variant < 0.25) { jR = 50; jG = 90; jB = 170; }
+      else if (variant < 0.5) { jR = 170; jG = 45; jB = 40; }
+      else if (variant < 0.75) { jR = 45; jG = 110; jB = 55; }
+      else { jR = 190; jG = 120; jB = 35; }
+      g.fillStyle = fogCol(jR, jG, jB); g.fillRect(-2, -9, 5, 5);
+      // Arms
+      g.fillRect(-4 + la, -8, 2, 3); g.fillRect(4 - la, -8, 2, 3);
+      // Poles
+      g.fillStyle = fogCol(140, 140, 145);
+      g.fillRect(-5 + la, -7, 1, 7); g.fillRect(5 - la, -7, 1, 7);
+      // Head
+      g.fillStyle = fogCol(210, 175, 145); g.fillRect(-1, -12, 3, 3);
+      // Hat
+      g.fillStyle = fogCol(Math.min(255, jR + 20), Math.min(255, jG + 20), Math.min(255, jB + 20));
+      g.fillRect(-1, -14, 3, 2);
+      // Goggles
+      g.fillStyle = fogCol(30, 30, 35); g.fillRect(0, -11, 2, 1);
+      g.restore();
+    }
 
-render();
-drawHUD();
-if(state==0)drawTitle();
-if(state==2)drawGameOver();
+    function drawTree(sx, sy, sc, type, fogT, vr) {
+      let skyR = dPh.fog[0], skyG = dPh.fog[1], skyB = dPh.fog[2];
+      function fogCol(r, gv, b) {
+        return `rgb(${(r * (1 - fogT) + skyR * fogT) | 0},${(gv * (1 - fogT) + skyG * fogT) | 0},${(b * (1 - fogT) + skyB * fogT) | 0})`;
+      }
+      if (type === 0) {
+        // Pine tree - 3 layers always, vary width (narrow/normal/bushy)
+        let wMul = vr < 0.33 ? 0.7 : vr < 0.66 ? 1 : 1.2;
+        let h = sc * 16;
+        let w = sc * 7.2 * wMul;
+        g.fillStyle = fogCol(70, 45, 20);
+        g.fillRect(sx - sc * 0.2, sy - h * 0.15, sc * 0.4, h * 0.2);
+        for (let i = 0; i < 3; i++) {
+          let ly = sy - h * 0.15 - h * i * 0.22;
+          let lw = w * (1 - i * 0.22);
+          g.fillStyle = fogCol(20 + i * 8, 70 + i * 10, 30 + i * 5);
+          g.beginPath(); g.moveTo(sx - lw, ly); g.lineTo(sx, ly - h * 0.32); g.lineTo(sx + lw, ly); g.closePath(); g.fill();
+        }
+        g.fillStyle = fogCol(240, 215, 190);
+        for (let i = 0; i < 3; i++) {
+          let ly = sy - h * 0.15 - h * i * 0.22;
+          let lw = w * (1 - i * 0.22) * 0.65;
+          g.beginPath(); g.moveTo(sx - lw, ly - h * 0.04); g.lineTo(sx, ly - h * 0.32); g.lineTo(sx + lw, ly - h * 0.04); g.closePath(); g.fill();
+        }
+      } else if (type === 1) {
+        let sz = sc * 6.4;
+        let bg = sz * 0.35;
+        if (vr < 0.25) {
+          // Angular rock
+          g.fillStyle = fogCol(85, 90, 105);
+          g.beginPath(); g.moveTo(sx - sz, sy + bg); g.lineTo(sx - sz * 0.7, sy - sz * 1.1); g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
+          g.lineTo(sx + sz, sy - sz * 0.7); g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(120, 125, 140);
+          g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.6); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.7, sy - sz * 0.8); g.closePath(); g.fill();
+          g.fillStyle = fogCol(210, 220, 230);
+          g.beginPath(); g.moveTo(sx - sz * 0.4, sy - sz * 0.95); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.65, sy - sz * 0.8); g.closePath(); g.fill();
+        } else if (vr < 0.5) {
+          // Round boulder
+          g.fillStyle = fogCol(80, 85, 100);
+          g.beginPath(); g.moveTo(sx - sz * 0.9, sy + bg); g.lineTo(sx - sz, sy - sz * 0.5); g.lineTo(sx - sz * 0.6, sy - sz * 1.1);
+          g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.7, sy - sz * 1.0); g.lineTo(sx + sz * 0.9, sy - sz * 0.4);
+          g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(115, 120, 135);
+          g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.7); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.closePath(); g.fill();
+          g.fillStyle = fogCol(210, 220, 230);
+          g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.9); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.5, sy - sz * 0.85); g.closePath(); g.fill();
+        } else if (vr < 0.75) {
+          // Flat wide slab
+          g.fillStyle = fogCol(90, 95, 108);
+          g.beginPath(); g.moveTo(sx - sz * 1.2, sy + bg); g.lineTo(sx - sz * 1.0, sy - sz * 0.6); g.lineTo(sx - sz * 0.2, sy - sz * 0.8);
+          g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.lineTo(sx + sz * 1.1, sy - sz * 0.3); g.lineTo(sx + sz * 1.0, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(125, 130, 142);
+          g.beginPath(); g.moveTo(sx - sz * 0.5, sy - sz * 0.45); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.5, sy - sz * 0.55); g.closePath(); g.fill();
+          g.fillStyle = fogCol(210, 220, 230);
+          g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.5); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.4, sy - sz * 0.55); g.closePath(); g.fill();
+        } else {
+          // Stacked jagged rocks
+          g.fillStyle = fogCol(78, 82, 98);
+          g.beginPath(); g.moveTo(sx - sz * 0.8, sy + bg); g.lineTo(sx - sz * 0.9, sy - sz * 0.4);
+          g.lineTo(sx - sz * 0.4, sy - sz * 0.9); g.lineTo(sx + sz * 0.15, sy - sz * 1.2);
+          g.lineTo(sx + sz * 0.5, sy - sz * 0.8); g.lineTo(sx + sz * 0.7, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(95, 100, 115);
+          g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.7);
+          g.lineTo(sx, sy - sz * 1.4); g.lineTo(sx + sz * 0.35, sy - sz * 0.9); g.closePath(); g.fill();
+          g.fillStyle = fogCol(215, 225, 235);
+          g.fillRect(sx - sz * 0.35, sy - sz * 0.72, sz * 0.55, sz * 0.08);
+          g.beginPath(); g.moveTo(sx - sz * 0.15, sy - sz * 1.1); g.lineTo(sx, sy - sz * 1.4); g.lineTo(sx + sz * 0.2, sy - sz * 1.1); g.closePath(); g.fill();
+        }
+      } else if (type === 2) {
+        // Bare tree
+        let h = sc * 14;
+        let lean = (vr - 0.5) * sc * 2;
+        g.strokeStyle = fogCol(60, 42, 25);
+        if (vr > 0.85) {
+          // Forked variant
+          g.lineWidth = Math.max(1.5, sc * 1);
+          let splitY = sy - h * 0.55;
+          g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + lean * 0.55, splitY); g.stroke();
+          g.lineWidth = Math.max(1, sc * 0.7);
+          g.beginPath(); g.moveTo(sx + lean * 0.55, splitY); g.lineTo(sx + lean - sc * 3, sy - h); g.stroke();
+          g.beginPath(); g.moveTo(sx + lean * 0.55, splitY); g.lineTo(sx + lean + sc * 3.5, sy - h * 0.9); g.stroke();
+          g.lineWidth = Math.max(1, sc * 0.4);
+          g.beginPath(); g.moveTo(sx + lean - sc * 2, sy - h * 0.85); g.lineTo(sx + lean - sc * 4.5, sy - h * 0.95); g.stroke();
+          g.beginPath(); g.moveTo(sx + lean + sc * 2.5, sy - h * 0.78); g.lineTo(sx + lean + sc * 5, sy - h * 0.88); g.stroke();
+        } else {
+          // Standard branched
+          let nBranch = vr < 0.2 ? 2 : vr < 0.5 ? 3 : vr < 0.8 ? 4 : 5;
+          g.lineWidth = Math.max(1.5, sc * 1);
+          g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + lean, sy - h); g.stroke();
+          g.lineWidth = Math.max(1, sc * 0.6);
+          for (let i = 0; i < nBranch; i++) {
+            let t = 0.35 + i * 0.55 / nBranch;
+            let dir = (i % 2 === 0) ? -1 : 1;
+            let bx = sx + lean * t + dir * sc * (3 + vr * 3);
+            let by2 = sy - h * (t + 0.15 + vr * 0.05);
+            g.beginPath(); g.moveTo(sx + lean * t, sy - h * t); g.lineTo(bx, by2); g.stroke();
+            if (nBranch >= 4 && i > 0) {
+              g.lineWidth = Math.max(1, sc * 0.35);
+              g.beginPath(); g.moveTo(bx, by2); g.lineTo(bx + dir * sc * (1 + vr), by2 - sc * (1 + vr * 0.5)); g.stroke();
+              g.lineWidth = Math.max(1, sc * 0.6);
+            }
+          }
+        }
+      } else if (type === 3) {
+        // Fallen log
+        let logLen = sc * (8 + vr * 6);
+        let logH = sc * (2.2 + vr * 1.2);
+        let angle = (vr - 0.5) * 0.3;
+        g.save(); g.translate(sx, sy); g.rotate(angle);
+        if (vr > 0.5) g.scale(-1, 1);
+        // Shadow
+        g.fillStyle = `rgba(0,0,0,${(0.12 * (1 - fogT)).toFixed(2)})`;
+        g.beginPath(); g.ellipse(0, logH * 0.1, logLen * 0.52, logH * 0.25, 0, 0, PI * 2); g.fill();
+        // Body
+        g.fillStyle = fogCol(72, 50, 28);
+        g.fillRect(-logLen / 2, -logH, logLen, logH);
+        // Bark highlight
+        g.fillStyle = fogCol(92, 65, 35);
+        g.fillRect(-logLen / 2, -logH, logLen, logH * 0.3);
+        // Dark underside
+        g.fillStyle = fogCol(52, 36, 18);
+        g.fillRect(-logLen / 2, -logH * 0.2, logLen, logH * 0.2);
+        // Clean-cut end
+        g.fillStyle = fogCol(88, 65, 38);
+        g.beginPath(); g.ellipse(-logLen / 2, -logH * 0.5, logH * 0.52, logH * 0.52, 0, 0, PI * 2); g.fill();
+        g.fillStyle = fogCol(105, 80, 50);
+        g.beginPath(); g.ellipse(-logLen / 2, -logH * 0.5, logH * 0.35, logH * 0.35, 0, 0, PI * 2); g.fill();
+        g.strokeStyle = fogCol(62, 42, 22); g.lineWidth = Math.max(1, sc * 0.15);
+        g.beginPath(); g.ellipse(-logLen / 2, -logH * 0.5, logH * 0.22, logH * 0.22, 0, 0, PI * 2); g.stroke();
+        g.beginPath(); g.ellipse(-logLen / 2, -logH * 0.5, logH * 0.08, logH * 0.08, 0, 0, PI * 2); g.stroke();
+        // Broken end
+        let bx = logLen / 2;
+        g.fillStyle = fogCol(60, 42, 22);
+        g.beginPath(); g.moveTo(bx, -logH * 0.05); g.lineTo(bx + logH * 0.15, -logH * 0.25);
+        g.lineTo(bx - logH * 0.1, -logH * 0.45); g.lineTo(bx + logH * 0.2, -logH * 0.65);
+        g.lineTo(bx + logH * 0.05, -logH * 0.85); g.lineTo(bx, -logH); g.closePath(); g.fill();
+        // Snow on top
+        g.fillStyle = fogCol(230, 240, 245);
+        g.fillRect(-logLen * 0.4, -logH * 1.05, logLen * 0.8, logH * 0.12);
+        g.restore();
+      } else if (type === 4) {
+        // Boulder cluster
+        let sz = sc * 8;
+        let bg = sz * 0.3;
+        // Main boulder
+        g.fillStyle = fogCol(72, 78, 92);
+        g.beginPath(); g.moveTo(sx - sz * 0.7, sy + bg); g.lineTo(sx - sz * 0.8, sy - sz * 0.5);
+        g.lineTo(sx - sz * 0.3, sy - sz * 0.9); g.lineTo(sx + sz * 0.2, sy - sz * 0.85);
+        g.lineTo(sx + sz * 0.6, sy - sz * 0.4); g.lineTo(sx + sz * 0.5, sy + bg); g.closePath(); g.fill();
+        g.fillStyle = fogCol(100, 106, 120);
+        g.beginPath(); g.moveTo(sx - sz * 0.2, sy - sz * 0.5); g.lineTo(sx + sz * 0.1, sy - sz * 0.85);
+        g.lineTo(sx + sz * 0.5, sy - sz * 0.45); g.closePath(); g.fill();
+        // Secondary boulder
+        let ox = vr > 0.5 ? sz * 0.6 : -sz * 0.5;
+        g.fillStyle = fogCol(80, 86, 100);
+        g.beginPath(); g.moveTo(sx + ox - sz * 0.4, sy + bg * 0.5); g.lineTo(sx + ox - sz * 0.35, sy - sz * 0.45);
+        g.lineTo(sx + ox + sz * 0.1, sy - sz * 0.6); g.lineTo(sx + ox + sz * 0.35, sy - sz * 0.3);
+        g.lineTo(sx + ox + sz * 0.3, sy + bg * 0.5); g.closePath(); g.fill();
+        // Third tiny rock
+        if (vr > 0.35) {
+          let ox2 = vr > 0.5 ? -sz * 0.4 : sz * 0.5;
+          g.fillStyle = fogCol(88, 92, 108);
+          g.beginPath(); g.moveTo(sx + ox2 - sz * 0.2, sy + bg * 0.3); g.lineTo(sx + ox2, sy - sz * 0.25);
+          g.lineTo(sx + ox2 + sz * 0.2, sy + bg * 0.3); g.closePath(); g.fill();
+        }
+        // Snow caps
+        g.fillStyle = fogCol(212, 222, 232);
+        g.beginPath(); g.moveTo(sx - sz * 0.4, sy - sz * 0.65); g.lineTo(sx - sz * 0.05, sy - sz * 0.9);
+        g.lineTo(sx + sz * 0.3, sy - sz * 0.6); g.closePath(); g.fill();
+        g.beginPath(); g.moveTo(sx + ox - sz * 0.15, sy - sz * 0.4); g.lineTo(sx + ox + sz * 0.05, sy - sz * 0.6);
+        g.lineTo(sx + ox + sz * 0.25, sy - sz * 0.35); g.closePath(); g.fill();
+      } else if (type === 5) {
+        // Big rock
+        let sz = sc * 14;
+        let bg = sz * 0.35;
+        // Main mass
+        g.fillStyle = fogCol(65, 70, 85);
+        g.beginPath(); g.moveTo(sx - sz * 0.9, sy + bg); g.lineTo(sx - sz * 1.0, sy - sz * 0.3);
+        g.lineTo(sx - sz * 0.75, sy - sz * 0.7); g.lineTo(sx - sz * 0.2, sy - sz * 1.05);
+        g.lineTo(sx + sz * 0.3, sy - sz * 1.1); g.lineTo(sx + sz * 0.7, sy - sz * 0.8);
+        g.lineTo(sx + sz * 0.95, sy - sz * 0.35); g.lineTo(sx + sz * 0.85, sy + bg); g.closePath(); g.fill();
+        // Right face
+        g.fillStyle = fogCol(90, 95, 112);
+        g.beginPath(); g.moveTo(sx + sz * 0.3, sy - sz * 1.1); g.lineTo(sx + sz * 0.7, sy - sz * 0.8);
+        g.lineTo(sx + sz * 0.95, sy - sz * 0.35); g.lineTo(sx + sz * 0.85, sy + bg);
+        g.lineTo(sx + sz * 0.1, sy + bg); g.lineTo(sx - sz * 0.05, sy - sz * 0.5); g.closePath(); g.fill();
+        // Top face
+        g.fillStyle = fogCol(105, 110, 128);
+        g.beginPath(); g.moveTo(sx - sz * 0.2, sy - sz * 1.05); g.lineTo(sx + sz * 0.3, sy - sz * 1.1);
+        g.lineTo(sx + sz * 0.7, sy - sz * 0.8); g.lineTo(sx + sz * 0.1, sy - sz * 0.7);
+        g.lineTo(sx - sz * 0.4, sy - sz * 0.65); g.closePath(); g.fill();
+        // Crack
+        g.strokeStyle = fogCol(45, 48, 60); g.lineWidth = Math.max(1, sc * 0.3);
+        g.beginPath(); g.moveTo(sx - sz * 0.15, sy - sz * 0.95); g.lineTo(sx - sz * 0.05, sy - sz * 0.5);
+        g.lineTo(sx + sz * 0.15, sy - sz * 0.1); g.stroke();
+        // Snow cap
+        g.fillStyle = fogCol(215, 225, 235);
+        g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.6); g.lineTo(sx - sz * 0.2, sy - sz * 1.05);
+        g.lineTo(sx + sz * 0.3, sy - sz * 1.1); g.lineTo(sx + sz * 0.6, sy - sz * 0.75);
+        g.lineTo(sx + sz * 0.1, sy - sz * 0.7); g.closePath(); g.fill();
+        // Snow ledge on crack
+        g.fillStyle = fogCol(210, 220, 232);
+        g.fillRect(sx - sz * 0.12, sy - sz * 0.52, sz * 0.25, sz * 0.06);
+      } else if (type === 6) {
+        // Tree clump (3-4 packed pines)
+        let baseH = sc * 22, baseW = sc * 10;
+        let gShift = (vr - 0.5) * 15;
+        let nTrees = vr < 0.3 ? 3 : 4;
+        let pos = [
+          { dx: -baseW * 0.8, dh: 0.85 + vr * 0.1, dw: 0.85 },
+          { dx: baseW * 0.6, dh: 0.95, dw: 0.95 },
+          { dx: -baseW * 0.05, dh: 1.1 + vr * 0.15, dw: 1.05 },
+          { dx: baseW * 1.2, dh: 0.78, dw: 0.75 }
+        ];
+        // Pass 1: trunks + green foliage
+        for (let ti = 0; ti < nTrees; ti++) {
+          let p = pos[ti], tx = sx + p.dx, th = baseH * p.dh, tw = baseW * 0.35 * p.dw;
+          g.fillStyle = fogCol(70, 45, 20);
+          g.fillRect(tx - sc * 0.15, sy - th * 0.15, sc * 0.3, th * 0.2);
+          for (let li = 0; li < 2; li++) {
+            let bY = sy - th * 0.15 - th * li * 0.25;
+            let tY = bY - th * 0.38;
+            let lw2 = tw * (1 - li * 0.2);
+            g.fillStyle = fogCol(18 + li * 10 + ti * 3, 60 + li * 12 + gShift + ti * 4, 25 + li * 5);
+            g.beginPath(); g.moveTo(tx - lw2, bY); g.lineTo(tx, tY); g.lineTo(tx + lw2, bY); g.closePath(); g.fill();
+          }
+        }
+        // Pass 2: snow on top
+        for (let ti = 0; ti < nTrees; ti++) {
+          let p = pos[ti], tx = sx + p.dx, th = baseH * p.dh, tw = baseW * 0.35 * p.dw;
+          for (let li = 0; li < 2; li++) {
+            let bY = sy - th * 0.15 - th * li * 0.25;
+            let tY = bY - th * 0.38;
+            let lw2 = tw * (1 - li * 0.2);
+            let snowBY = bY - (bY - tY) * 0.55;
+            let snowLw = lw2 * 0.5;
+            g.fillStyle = fogCol(228, 238, 244);
+            g.beginPath(); g.moveTo(tx - snowLw, snowBY); g.lineTo(tx, tY); g.lineTo(tx + snowLw, snowBY); g.closePath(); g.fill();
+          }
+        }
+      }
+    }
 
-requestAnimationFrame(frame);
-}
+    function renderObstacles() {
+      let visible = [];
+      for (let i = 0; i < obstacles.length; i++) {
+        let ob = obstacles[i];
+        let wy = getHeight(ob.x, ob.z);
+        let p = project(ob.x, wy, ob.z);
+        if (p.z < 0.5 || p.z > 45 || p.x < -200 || p.x > W + 200) continue;
 
-// Initialize on downhill
-for(let z=0;z<200;z++){if(getHeight(0,z+2)-getHeight(0,z-2)<-0.3){pZ=z;break;}}
-pY=getHeight(0,pZ);
-camY=pY+2;camZ=pZ-3;
-lastTime=performance.now();
-requestAnimationFrame(frame);
-</script></body></html>
+        // World-space ray occlusion: find the most blocking terrain between camera and obstacle
+        let maxExcess = 0;
+        let bestT = 0;
+        for (let s = 1; s < 12; s++) {
+          let t = s / 12;
+          let sx = camX + (ob.x - camX) * t;
+          let sz = camZ + (ob.z - camZ) * t;
+          let losY = camY + (wy - camY) * t;
+          let terrainH = getHeight(sx, sz);
+          let excess = terrainH - losY;
+          if (excess > maxExcess) { maxExcess = excess; bestT = t; }
+        }
+
+        // Store crest info for curved clip (very low threshold for smooth transition)
+        let crest = null;
+        if (maxExcess > 0) {
+          crest = {
+            x: camX + (ob.x - camX) * bestT,
+            z: camZ + (ob.z - camZ) * bestT
+          };
+        }
+
+        // Ground snap
+        let col = Math.round(Math.max(0, Math.min(W - 1, p.x)));
+        let baseY = p.y;
+        if (p.y < terrainSil[col]) baseY = terrainSil[col];
+
+        visible.push({ kind: 'ob', ob, p, wy, crest, baseY, scale: ob.scale || 1, variant: ob.variant || 0 });
+      }
+      // Add skiers to visible array
+      for (let i = 0; i < skiers.length; i++) {
+        let sk = skiers[i];
+        let wy = getHeight(sk.x, sk.z);
+        let p = project(sk.x, wy, sk.z);
+        if (p.z < 0.5 || p.z > 45 || p.x < -200 || p.x > W + 200) continue;
+        let col = Math.round(Math.max(0, Math.min(W - 1, p.x)));
+        let baseY = p.y;
+        if (p.y < terrainSil[col]) baseY = terrainSil[col];
+        visible.push({ kind: 'sk', sk, p, baseY });
+      }
+      visible.sort((a, b) => b.p.z - a.p.z);
+      for (let i = 0; i < visible.length; i++) {
+        let v = visible[i];
+        let { p, baseY } = v;
+        let fogT = Math.min(1, p.z * p.z * 0.0006);
+
+        if (v.kind === 'sk') {
+          // Crossing skier
+          let sk = v.sk, sc2 = S * 0.036 / p.z;
+          // Snow spray
+          if (sk.active && Math.random() < 0.35) {
+            g.fillStyle = `rgba(255,255,255,${(0.25 * (1 - fogT)).toFixed(2)})`;
+            g.fillRect(p.x + (Math.random() - 0.5) * sc2 * 8, baseY - Math.random() * sc2 * 4, sc2 * 2, sc2);
+          }
+          drawCrossingSkier(p.x, baseY, sc2, sk.vx > 0 ? 1 : -1, sk.ph, fogT, sk.variant);
+          continue;
+        }
+
+        let { ob, wy, crest, scale, variant } = v;
+        let sc = S * 0.107 / p.z * scale;
+
+        // Directional shadow (sun from right)
+        let shAlpha = 0.18 * (1 - fogT) * dPh.sunStr;
+        let shLen = sc * 3.5, shW = sc * 0.5;
+        if (ob.type === 0) shLen = sc * 4.5;
+        else if (ob.type === 2) shLen = sc * 4.0;
+        else if (ob.type === 1 || ob.type === 4) { shLen = sc * 2.5; shW = sc * 0.7; }
+        else if (ob.type === 3) { shLen = sc * 3; shW = sc * 0.8; }
+        else if (ob.type === 5) { shLen = sc * 5; shW = sc * 1; }
+        else if (ob.type === 6) shLen = sc * 5;
+        g.save();
+        g.translate(p.x, baseY);
+        g.transform(1, 0, -0.6, 0.18, 0, 0);
+        g.fillStyle = `rgba(40,25,30,${shAlpha.toFixed(2)})`;
+        g.fillRect(-shLen, -shW * 0.5, shLen, shW);
+        g.restore();
+
+        g.save();
+        if (crest) {
+          let span = 12, ns = 10;
+          g.beginPath();
+          let firstX = crest.x - span;
+          let fp = project(firstX, getHeight(firstX, crest.z), crest.z);
+          g.moveTo(fp.x, 0);
+          let lastX = crest.x + span;
+          let lp = project(lastX, getHeight(lastX, crest.z), crest.z);
+          g.lineTo(lp.x, 0);
+          for (let j = ns; j >= 0; j--) {
+            let wx = crest.x + (j / ns - 0.5) * span * 2;
+            let h = getHeight(wx, crest.z);
+            let cp = project(wx, h, crest.z);
+            g.lineTo(cp.x, cp.y);
+          }
+          g.closePath();
+          g.clip();
+        }
+
+        g.beginPath(); g.rect(-20, 0, W + 40, baseY); g.clip();
+        drawTree(p.x, baseY, sc, ob.type, fogT, variant);
+        g.restore();
+      }
+    }
+
+    function checkCollisions() {
+      // Only the rider triggers a crash - rider sits at pX, pZ
+      // Rider body is narrow (~0.6 world units wide)
+      for (let i = 0; i < obstacles.length; i++) {
+        let ob = obstacles[i];
+        if (ob.hit) continue;
+        let dz = ob.z - pZ;
+        let dx = ob.x - pX;
+        let s = ob.scale || 1;
+        let hx = ob.type === 1 ? 1.2 : ob.type === 3 ? 1.8 : ob.type === 4 ? 1.3 : ob.type === 5 ? 1.8 : ob.type === 6 ? 1.5 : 0.7;
+        let hz = ob.type === 3 ? 0.6 : ob.type === 5 ? 1.5 : ob.type === 6 ? 1.2 : 1.0;
+        if (Math.abs(dz) < hz * s && Math.abs(dx) < hx * s) {
+          ob.hit = true;
+          // CRASH!
+          crashed = 1;
+          state = 2;
+          crashTimer = 1.5;
+          playCrashSfx();
+          // Screen shake
+          shakeX = (Math.random() - 0.5) * 20;
+          shakeY = (Math.random() - 0.5) * 15;
+          // Crash particles
+          for (let j = 0; j < 25; j++) {
+            particles.push({
+              x: pScrX + Math.random() * 20 - 10,
+              y: pScrY + Math.random() * 10 - 5,
+              vx: (Math.random() - 0.5) * 8,
+              vy: -Math.random() * 6 - 2,
+              life: 25 + Math.random() * 20 | 0, ml: 45,
+              sz: 2 + Math.random() * 4
+            });
+          }
+          // Save high score
+          let finalDist = Math.floor(pZ);
+          if (finalDist > hiScore) { hiScore = finalDist; try { localStorage.setItem('hs', hiScore) } catch (e) { } }
+          return;
+        }
+      }
+    }
+
+    function update(dt) {
+      if (state != 1) return;
+      if (dt > 0.1) dt = 0.1;
+      dayT = (dayT + speed * dt * 0.5 * 0.0032) % 1;
+
+      // === 2. PLAYER POSITIONING: Snap to ground ===
+      // Slope: negative=downhill (fast), positive=uphill (slow)
+      slopeVal = getHeight(pX, pZ + 2) - getHeight(pX, pZ - 2);
+      lateralSlope = (getHeight(pX + 2, pZ) - getHeight(pX - 2, pZ)) / 4;
+      let slope = slopeVal < 0 ? -slopeVal * 0.12 : -slopeVal * 0.02;
+
+      let tt = terrainType(Math.floor(pZ));
+      let friction = tt == 0 ? 0.015 : tt == 1 ? 0.025 : tt == 2 ? 0.008 : 0.02;
+      let gravity = 9.8 * slope;
+      let turnDrag = Math.abs(turnRate) * 0.1;
+      let dragMult = inputTuck ? 0.6 : 1;
+      let airDrag = speed * speed * 0.001 * dragMult;
+
+      // Progressive difficulty: speed floor/cap and steering scale with score
+      let prog = Math.min(1, score / 8000);
+      let rampUp = Math.min(1, pZ / 30);
+      let minSpd = rampUp * 14 + prog * 10;
+      let maxSpd = 35 + prog * 15;
+      let steerMul = 1 + prog * 0.6;
+
+      speed += gravity * dt;
+      speed -= (friction + turnDrag) * speed * dt;
+      speed -= airDrag * dt;
+      if (slopeVal > 0) speed -= slopeVal * slopeVal * 0.15 * dt;
+      speed = Math.max(minSpd, Math.min(speed, maxSpd));
+      accelVal = lerp(accelVal, Math.max(0, (speed - prevSpd) / dt), Math.min(1, dt * 10));
+      prevSpd = speed;
+
+      // Steering
+      let curv = curvature(pZ) * 0.002;
+      turnRate += (inputX * 2.5 * steerMul - turnRate) * dt * 1.2;
+      pX += dogTurn * dt * 4.0 * steerMul;
+      pX += curv * speed * dt * 0.1;
+
+      // Move forward
+      pZ += speed * dt * 0.5;
+
+      // Snap player Y to ground height
+      pY = getHeight(pX, pZ);
+
+      // Record trail positions (left and right runner)
+      let rOff = 0.2;
+      let trailZOff = 0.42 * Math.min(1, Math.max(0.35, -slopeVal * 0.5));
+      trailHist.unshift({ lx: pX - rOff, lz: pZ - trailZOff, rx: pX + rOff, rz: pZ - trailZOff });
+      if (trailHist.length > trailMaxLen) trailHist.length = trailMaxLen;
+
+      // Score
+      score += speed * dt * 2;
+
+      // === 3. CAMERA LOGIC: Spring arm with lerp ===
+      smoothFov = lerp(smoothFov, 0.65 + slopeVal * 0.07, Math.min(1, dt * 3));
+      let t = Math.min(1, dt * 5);
+      let dh = Math.min(2.5, Math.max(0, -slopeVal));
+      // Camera X lags behind player so you can see side-to-side dodging
+      camX = lerp(camX, pX, Math.min(1, dt * 2.5));
+      camY = lerp(camY, pY + 2 + dh * 1.2, Math.min(1, dt * 8));
+      camZ = lerp(camZ, pZ - 3 - dh * 0.6, t);
+      // Camera yaw: look toward a point ahead of the player
+      camAngle = Math.atan2(pX - camX, pZ + 4 - camZ);
+
+      // Snow effects
+      if (Math.abs(turnRate) > 0.5 && speed > 3) {
+        spraySnow();
+      }
+      ambientSnow();
+      if (speed > 5) runnerSpray();
+
+      // Smooth dog turn (lags behind turnRate for natural feel)
+      dogTurn = lerp(dogTurn, turnRate, Math.min(1, dt * 2));
+
+      // Shake decay
+      shakeX *= 0.85; shakeY *= 0.85;
+      if (Math.abs(shakeX) < 0.5) shakeX = 0;
+      if (Math.abs(shakeY) < 0.5) shakeY = 0;
+
+      // Obstacles & skiers
+      spawnObstacles();
+      cleanupObstacles();
+      if (state === 1) updateSkiers(dt);
+      checkCollisions();
+    }
+
+    // Snowy text: white fill with icy blue shadow
+    function snowText(txt, x, y) {
+      g.shadowColor = 'rgba(150,200,255,0.7)';
+      g.shadowBlur = 6;
+      g.strokeStyle = 'rgba(180,220,255,0.5)';
+      g.lineWidth = 2;
+      g.strokeText(txt, x, y);
+      g.fillText(txt, x, y);
+      g.shadowBlur = 0;
+    }
+
+    function drawHUD() {
+      if (state != 1) return;
+      let fs = Math.max(14, S * 0.04 | 0);
+      g.textAlign = 'left';
+      g.font = 'bold ' + fs + 'px monospace';
+      g.fillStyle = '#fff';
+      snowText(Math.floor(pZ) + 'm', 10, fs + 5);
+      snowText(speed.toFixed(1) + ' mph', 10, fs * 2 + 10);
+    }
+
+    function drawTitle() {
+      g.textAlign = 'center';
+      g.font = 'bold ' + Math.max(36, S * 0.1 | 0) + 'px monospace';
+      g.fillStyle = 'rgb(255, 255, 200)';
+      snowText("Scotty's", W / 2, H * 0.2);
+
+      if (Date.now() % 1000 < 600) {
+        g.fillStyle = '#fff';
+        g.font = 'bold ' + Math.max(18, S * 0.05 | 0) + 'px monospace';
+        snowText('TAP TO START', W / 2, H * 0.62);
+      }
+
+      if (hiScore > 0) {
+        g.fillStyle = '#ff0';
+        g.font = Math.max(14, S * 0.04 | 0) + 'px monospace';
+        snowText('Best: ' + hiScore + 'm', W / 2, H * 0.72);
+      }
+
+      g.fillStyle = 'rgba(255,230,190,0.5)';
+      g.font = Math.max(11, S * 0.03 | 0) + 'px monospace';
+      snowText('Touch sides to steer', W / 2, H * 0.82);
+      snowText('Arrow keys / mouse on desktop', W / 2, H * 0.87);
+    }
+
+    function drawGameOver() {
+      g.textAlign = 'center';
+      g.fillStyle = 'rgba(0,0,0,0.5)';
+      g.fillRect(0, H * 0.2, W, H * 0.6);
+      g.fillStyle = '#f44';
+      g.font = 'bold ' + Math.max(32, S * 0.09 | 0) + 'px monospace';
+      snowText('CRASHED!', W / 2, H * 0.35);
+      g.fillStyle = '#fff';
+      g.font = Math.max(15, S * 0.05 | 0) + 'px monospace';
+      snowText('Distance: ' + Math.floor(pZ) + 'm', W / 2, H * 0.47);
+      if (Math.floor(pZ) >= hiScore && hiScore > 0) {
+        g.fillStyle = '#ff0';
+        snowText('NEW RECORD!', W / 2, H * 0.56);
+      }
+      if (Date.now() % 1000 < 600) {
+        g.fillStyle = '#fff';
+        g.font = 'bold ' + Math.max(16, S * 0.045 | 0) + 'px monospace';
+        snowText('TAP TO RETRY', W / 2, H * 0.68);
+      }
+    }
+
+    function resetGame() {
+      pX = 0; pZ = 0;
+      for (let z = 0; z < 200; z++) { if (getHeight(0, z + 2) - getHeight(0, z - 2) < -0.3) { pZ = z; break; } }
+      pY = getHeight(0, pZ);
+      speed = 0; turnRate = 0;
+      camX = 0; camY = pY + 2; camZ = pZ - 3; camAngle = 0;
+      score = 0; combo = 1; maxCombo = 1; crashed = 0; crashTimer = 0;
+      particles = []; trailHist = []; shakeX = 0; shakeY = 0; prevSpd = 14; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
+      obstacles = []; lastSpawnZ = 0; spawnedCells = new Set(); skiers = []; nextSkierZ = 50; dayT = 0;
+    }
+
+    let keys = {};
+    let mouseDown = 0, mouseX = 0, mouseY = 0;
+    onkeydown = e => { keys[e.key] = 1; if (state != 1) startOrRetry() };
+    onkeyup = e => { keys[e.key] = 0 };
+
+    function handlePointer(e) {
+      e.preventDefault();
+      let t = e.touches ? e.touches[0] : e;
+      mouseX = t.clientX; mouseY = t.clientY;
+      mouseDown = 1;
+    }
+    c.addEventListener('touchstart', e => { handlePointer(e); if (state != 1) startOrRetry() }, { passive: false });
+    c.addEventListener('touchmove', e => { handlePointer(e) }, { passive: false });
+    c.addEventListener('touchend', e => { e.preventDefault(); mouseDown = 0 }, { passive: false });
+    c.addEventListener('mousedown', e => { mouseDown = 1; mouseX = e.clientX; mouseY = e.clientY; if (state != 1) startOrRetry() });
+    c.addEventListener('mousemove', e => { if (mouseDown) { mouseX = e.clientX; mouseY = e.clientY } });
+    c.addEventListener('mouseup', () => { mouseDown = 0 });
+
+    // === AUDIO SYSTEM ===
+    let ax, aInited = 0, aM, noiseBuf;
+    let aWindG, aWindF, wg2, aPadG, padF, padOscs = [], aRunG, aRunF, aCarvG, aCarvF, aCarvF2, aChimeG;
+    let chordIdx = 0, chordTimer = 7, chimeTimer = 3, arpStep = 0, arpTimer = 1;
+    let carveBurst = 0, prevTurnAbs = 0, carveVol = 0, smoothTempo = 1;
+    let chords = [[65.4,130.8,164.8,196],[55,130.8,164.8,196],[43.7,130.8,164.8,174.6],[49,123.5,146.8,196]];
+    let chimeScales = [[523.3,659.3,784,1046.5,1318.5],[523.3,659.3,784,880,1046.5],[523.3,587.3,698.5,880,1046.5],[587.3,784,988,1174.7,1568]];
+
+    function initAudio() {
+      if (aInited) return;
+      ax = new (window.AudioContext || window.webkitAudioContext)();
+      aInited = 1;
+      // Master gain
+      aM = ax.createGain(); aM.gain.value = 0.6; aM.connect(ax.destination);
+      // Shared noise buffer
+      noiseBuf = ax.createBuffer(1, ax.sampleRate, ax.sampleRate);
+      let nd = noiseBuf.getChannelData(0);
+      for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+
+      // Wind main
+      let wn = ax.createBufferSource(); wn.buffer = noiseBuf; wn.loop = true;
+      aWindF = ax.createBiquadFilter(); aWindF.type = 'bandpass'; aWindF.frequency.value = 400; aWindF.Q.value = 0.35;
+      aWindG = ax.createGain(); aWindG.gain.value = 0.15;
+      wn.connect(aWindF); aWindF.connect(aWindG); aWindG.connect(aM); wn.start();
+
+      // Wind gust
+      let wn2 = ax.createBufferSource(); wn2.buffer = noiseBuf; wn2.loop = true;
+      let wf2 = ax.createBiquadFilter(); wf2.type = 'bandpass'; wf2.frequency.value = 180; wf2.Q.value = 0.4;
+      wg2 = ax.createGain(); wg2.gain.value = 0.04;
+      wn2.connect(wf2); wf2.connect(wg2); wg2.connect(aM); wn2.start();
+      let wLfo = ax.createOscillator(); wLfo.type = 'sine'; wLfo.frequency.value = 0.15;
+      let wLfoG = ax.createGain(); wLfoG.gain.value = 0.06;
+      wLfo.connect(wLfoG); wLfoG.connect(wg2.gain); wLfo.start();
+
+      // Pad chords
+      padF = ax.createBiquadFilter(); padF.type = 'lowpass'; padF.frequency.value = 600; padF.Q.value = 0.3;
+      aPadG = ax.createGain(); aPadG.gain.value = 0.04;
+      padF.connect(aPadG); aPadG.connect(aM);
+      for (let i = 0; i < 4; i++) {
+        let o = ax.createOscillator(); o.type = 'triangle'; o.frequency.value = chords[0][i];
+        o.connect(padF); o.start(); padOscs.push(o);
+      }
+      let pLfo = ax.createOscillator(); pLfo.type = 'sine'; pLfo.frequency.value = 0.06;
+      let pLfoG = ax.createGain(); pLfoG.gain.value = 0.03;
+      pLfo.connect(pLfoG); pLfoG.connect(aPadG.gain); pLfo.start();
+      let pLfo2 = ax.createOscillator(); pLfo2.type = 'sine'; pLfo2.frequency.value = 0.13;
+      let pLfo2G = ax.createGain(); pLfo2G.gain.value = 0.5;
+      pLfo2.connect(pLfo2G); pLfo2G.connect(padOscs[2].detune); pLfo2.start();
+
+      // Runner hiss
+      let rn = ax.createBufferSource(); rn.buffer = noiseBuf; rn.loop = true;
+      aRunF = ax.createBiquadFilter(); aRunF.type = 'highpass'; aRunF.frequency.value = 2000; aRunF.Q.value = 0.3;
+      aRunG = ax.createGain(); aRunG.gain.value = 0;
+      rn.connect(aRunF); aRunF.connect(aRunG); aRunG.connect(aM); rn.start();
+
+      // Carve
+      let cn = ax.createBufferSource(); cn.buffer = noiseBuf; cn.loop = true;
+      aCarvF = ax.createBiquadFilter(); aCarvF.type = 'bandpass'; aCarvF.frequency.value = 600; aCarvF.Q.value = 0.6;
+      aCarvF2 = ax.createBiquadFilter(); aCarvF2.type = 'peaking'; aCarvF2.frequency.value = 1200; aCarvF2.gain.value = 5; aCarvF2.Q.value = 0.5;
+      aCarvG = ax.createGain(); aCarvG.gain.value = 0;
+      cn.connect(aCarvF); aCarvF.connect(aCarvF2); aCarvF2.connect(aCarvG); aCarvG.connect(aM); cn.start();
+
+      // Chime bus
+      aChimeG = ax.createGain(); aChimeG.gain.value = 0.4; aChimeG.connect(aM);
+    }
+
+    function playChime() {
+      let sc = chimeScales[chordIdx];
+      let f = sc[(Math.random() * sc.length) | 0];
+      let t = ax.currentTime;
+      let g1 = ax.createGain(); g1.gain.setValueAtTime(0, t); g1.gain.linearRampToValueAtTime(0.15, t + 0.25);
+      g1.gain.setTargetAtTime(0, t + 0.3, 0.7 + Math.random() * 0.8); g1.connect(aChimeG);
+      let o1 = ax.createOscillator(); o1.type = 'sine'; o1.frequency.value = f; o1.connect(g1); o1.start(t); o1.stop(t + 5);
+      let g2 = ax.createGain(); g2.gain.value = 0.25; g2.connect(g1);
+      let o2 = ax.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.003; o2.connect(g2); o2.start(t); o2.stop(t + 5);
+      let g3 = ax.createGain(); g3.gain.value = 0.08; g3.connect(g1);
+      let o3 = ax.createOscillator(); o3.type = 'sine'; o3.frequency.value = f * 3.01; o3.connect(g3); o3.start(t); o3.stop(t + 5);
+    }
+
+    function playArpPhrase() {
+      let sc = chimeScales[chordIdx];
+      let n = 2 + ((Math.random() * 2) | 0);
+      let base = (Math.random() * (sc.length - n)) | 0;
+      let t = ax.currentTime;
+      let gap = 0.18 * smoothTempo;
+      for (let i = 0; i < n; i++) {
+        let f = sc[base + i];
+        let gt = ax.createGain(); gt.gain.setValueAtTime(0, t + i * gap);
+        gt.gain.linearRampToValueAtTime(0.12, t + i * gap + 0.03);
+        gt.gain.setTargetAtTime(0, t + i * gap + 0.05, 0.5 + Math.random() * 0.4); gt.connect(aChimeG);
+        let o = ax.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(gt); o.start(t + i * gap); o.stop(t + i * gap + 4);
+        let g2 = ax.createGain(); g2.gain.value = 0.25; g2.connect(gt);
+        let o2 = ax.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.003; o2.connect(g2); o2.start(t + i * gap); o2.stop(t + i * gap + 4);
+      }
+    }
+
+    function playBgArp() {
+      let sc = chimeScales[chordIdx];
+      let f = sc[arpStep % sc.length] * 0.5;
+      let t = ax.currentTime;
+      let gt = ax.createGain(); gt.gain.setValueAtTime(0.06 + Math.random() * 0.03, t);
+      gt.gain.setTargetAtTime(0, t + 0.05, 0.6); gt.connect(aChimeG);
+      let o = ax.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(gt); o.start(t); o.stop(t + 3);
+      arpStep++;
+    }
+
+    function playCrashSfx() {
+      if (!aInited) return;
+      let len = (ax.sampleRate * 0.3) | 0;
+      let nb = ax.createBuffer(1, len, ax.sampleRate);
+      let nd = nb.getChannelData(0);
+      for (let i = 0; i < len; i++) nd[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ax.sampleRate * 0.08));
+      let bs = ax.createBufferSource(); bs.buffer = nb;
+      let cf = ax.createBiquadFilter(); cf.type = 'lowpass'; cf.frequency.value = 800;
+      let cg = ax.createGain(); cg.gain.value = 1.0;
+      bs.connect(cf); cf.connect(cg); cg.connect(aM); bs.start();
+    }
+
+    function updateAudio(dt) {
+      let spd = Math.max(0, Math.min(1, (speed - 14) / 36));
+      // Tempo: slopeVal<0 = downhill = faster, >0 = uphill = slower
+      let targetTempo = Math.max(0.35, Math.min(1.5, 1 + slopeVal * 0.35));
+      smoothTempo = lerp(smoothTempo, targetTempo, Math.min(1, dt * 2));
+      // Wind
+      aWindG.gain.value = 0.04 + spd * 0.06;
+      aWindF.frequency.value = 250 + spd * 600;
+      // Runner hiss
+      aRunG.gain.value = spd * 0.04;
+      aRunF.frequency.value = 1500 + spd * 2500;
+      // Carve
+      let ta = Math.abs(turnRate);
+      let turnDelta = ta - prevTurnAbs;
+      if (turnDelta > 0.005 && ta > 0.15) carveBurst = Math.min(1, carveBurst + turnDelta * 8);
+      carveBurst *= Math.max(0, 1 - dt * 2.5);
+      let steady = Math.min(1, ta * 1.2) * Math.max(0.3, spd) * 0.03;
+      carveVol = carveBurst * 0.1 + steady;
+      aCarvG.gain.value = carveVol;
+      aCarvF.frequency.value = 400 + ta * 350 + carveBurst * 200;
+      aCarvF.Q.value = 0.5 + carveBurst * 1.0;
+      prevTurnAbs = ta;
+      // Chord progression (tempo-scaled)
+      chordTimer -= dt / smoothTempo;
+      if (chordTimer <= 0) {
+        chordIdx = (chordIdx + 1) % 4;
+        let t = ax.currentTime;
+        for (let i = 0; i < 4; i++) padOscs[i].frequency.setTargetAtTime(chords[chordIdx][i], t, 1.5);
+        chordTimer = 6 + Math.random() * 3;
+      }
+      // Chimes (tempo-scaled)
+      if (state == 1) {
+        chimeTimer -= dt / smoothTempo;
+        if (chimeTimer <= 0) {
+          if (Math.random() < 0.3) { playArpPhrase(); chimeTimer = 4 + Math.random() * 5; }
+          else { playChime(); chimeTimer = 2 + Math.random() * 4; }
+        }
+        arpTimer -= dt / smoothTempo;
+        if (arpTimer <= 0) { playBgArp(); arpTimer = 0.8 + Math.random() * 0.4; }
+      }
+      // Master fade on crash
+      if (state == 2) aM.gain.value = Math.max(0.15, aM.gain.value - dt * 0.5);
+      else aM.gain.value = Math.min(0.6, aM.gain.value + dt * 0.3);
+    }
+
+    function startOrRetry() {
+      initAudio();
+      if (state == 0) { state = 1; resetGame() }
+      else if (state == 2 && crashTimer <= 0) { state = 0 }
+    }
+
+    function processInput() {
+      inputX = 0; inputTuck = 0;
+      if (keys['ArrowLeft'] || keys['a']) inputX = -1;
+      if (keys['ArrowRight'] || keys['d']) inputX = 1;
+      if (keys['ArrowDown'] || keys['s']) inputTuck = 1;
+      if (mouseDown) {
+        let rx = (mouseX - W / 2) / (W / 2);
+        inputX = Math.max(-1, Math.min(1, rx * 1.5));
+        if (mouseY > H * 0.7) inputTuck = 1;
+      }
+    }
+
+    function frame(t) {
+      let dt = (t - lastTime) / 1000;
+      lastTime = t;
+      if (dt > 0.2) dt = 0.016;
+
+      processInput();
+      if (state == 1) update(dt);
+      if (state == 2) { crashTimer -= dt; shakeX *= 0.9; shakeY *= 0.9 }
+
+      if (aInited) updateAudio(dt);
+      updateDay();
+      render();
+      drawHUD();
+      if (state == 0) drawTitle();
+      if (state == 2) drawGameOver();
+
+      requestAnimationFrame(frame);
+    }
+
+    // Initialize on downhill
+    for (let z = 0; z < 200; z++) { if (getHeight(0, z + 2) - getHeight(0, z - 2) < -0.3) { pZ = z; break; } }
+    pY = getHeight(0, pZ);
+    camY = pY + 2; camZ = pZ - 3;
+    lastTime = performance.now();
+    requestAnimationFrame(frame);
+  </script>
+</body>
+
+</html>

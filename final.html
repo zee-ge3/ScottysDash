@@ -27,7 +27,8 @@
   <script>
     let c = document.getElementById('c'), g = c.getContext('2d');
     let W, H;
-    function resize() { W = c.width = innerWidth; H = c.height = innerHeight }
+    let S; // S = min(W,H) for aspect-ratio-independent scaling
+    function resize() { W = c.width = innerWidth; H = c.height = innerHeight; S = Math.min(W, H) }
     resize(); onresize = resize;
 
     const PI = Math.PI;
@@ -256,7 +257,7 @@
       // Title "DASH" — in front of mountains, behind terrain
       if (state == 0) {
         g.textAlign = 'center';
-        g.font = 'bold ' + Math.max(50, W * 0.15 | 0) + 'px monospace';
+        g.font = 'bold ' + Math.max(50, S * 0.15 | 0) + 'px monospace';
         g.fillStyle = 'rgb(255, 100, 0)';
         snowText('DASH', W / 2, H * 0.38);
       }
@@ -346,21 +347,58 @@
         }
       }
 
+      // === SKIER TRAILS ===
+      for (let si = 0; si < skiers.length; si++) {
+        let sk = skiers[si];
+        if (sk.trail.length < 3) continue;
+        let trackW = 0.02;
+        let segSize = 4;
+        let totalSegs = Math.ceil(sk.trail.length / segSize);
+        for (let r = 0; r < 2; r++) {
+          for (let seg = 0; seg < totalSegs; seg++) {
+            let i0 = seg * segSize;
+            let i1 = Math.min(i0 + segSize, sk.trail.length - 1);
+            if (i0 >= sk.trail.length - 1) break;
+            let fadeT = i0 / sk.trail.length;
+            let alpha = 0.25 * Math.max(0.3, Math.min(1, fadeT * 4));
+            g.beginPath();
+            let started = false;
+            for (let i = i0; i <= i1; i++) {
+              let h = sk.trail[i];
+              let tx = r === 0 ? h.lx : h.rx, tz = r === 0 ? h.lz : h.rz;
+              let tp = project(tx - trackW, getHeight(tx, tz), tz);
+              if (tp.z < 0.5 || tp.z > 45) continue;
+              if (!started) { g.moveTo(tp.x, tp.y); started = true; } else g.lineTo(tp.x, tp.y);
+            }
+            for (let i = i1; i >= i0; i--) {
+              let h = sk.trail[i];
+              let tx = r === 0 ? h.lx : h.rx, tz = r === 0 ? h.lz : h.rz;
+              let tp = project(tx + trackW, getHeight(tx, tz), tz);
+              if (tp.z < 0.5 || tp.z > 45) continue;
+              g.lineTo(tp.x, tp.y);
+            }
+            g.closePath();
+            g.fillStyle = `rgba(30,35,50,${alpha.toFixed(3)})`;
+            g.fill();
+          }
+        }
+      }
+
       // === 5. RENDER BOBSLED TEAM ===
       let pp = project(pX, pY, pZ);
       if (pp.z > 0.3) {
         pScrX = pp.x; pScrY = pp.y;
-        let pSc = pScrSc = 18 / pp.z;
+        let pSc = pScrSc = S * 0.024 / pp.z;
         let ph = pZ * 4;
         // Dog lateral offset from steering (smoothed)
         // Lead dogs — swing out wider on turns
         let lXw = pX + dogTurn * 1.2;
         let lp = project(lXw, getHeight(lXw, pZ + 2), pZ + 2);
-        let lS = 27 / lp.z;
+        let lS = S * 0.036 / lp.z;
         // Wheel dogs — moderate swing
         let wXw = pX + dogTurn * 0.5;
         let wp = project(wXw, getHeight(wXw, pZ + 1), pZ + 1);
-        let wS = 27 / wp.z;
+        let wS = S * 0.036 / wp.z;
         // Dog screen positions (tighter spread)
         let ldLx = lp.x - 8 * lS, ldRx = lp.x + 8 * lS;
         let wdLx = wp.x - 6 * wS, wdRx = wp.x + 6 * wS;
@@ -623,7 +661,7 @@
           let aheadCenter = dzToPlayer > 5 && dzToPlayer < 25 && dxToPlayer < 4;
           if (!aheadCenter && r1 > density) continue;
 
-          let type = r2 < 0.5 ? 0 : r2 < 0.8 ? 1 : 2;
+          let type = r2 < 0.32 ? 0 : r2 < 0.48 ? 1 : r2 < 0.6 ? 2 : r2 < 0.72 ? 3 : r2 < 0.82 ? 4 : r2 < 0.92 ? 5 : 6;
           let scale = 0.6 + seedRand(cz * 7, cx * 13) * 0.8;
           let variant = seedRand(cz * 31, cx * 59);
           obstacles.push({ x: ox, z: oz, type, hit: false, scale, variant, key });
@@ -634,6 +672,9 @@
     // Track which cells we've already generated
     let spawnedCells = new Set();
 
+    // Crossing skiers
+    let skiers = [], nextSkierZ = 50;
+
     function cleanupObstacles() {
       for (let i = obstacles.length - 1; i >= 0; i--) {
         let ob = obstacles[i];
@@ -642,6 +683,79 @@
           obstacles.splice(i, 1);
         }
       }
+    }
+
+    function updateSkiers(dt) {
+      // Spawn far to the side so they ski across visibly
+      if (pZ > nextSkierZ) {
+        let side = seedRand(Math.floor(pZ), 9999) < 0.5 ? -1 : 1;
+        skiers.push({
+          x: pX + side * (25 + Math.random() * 10), z: pZ + 20 + Math.random() * 15,
+          vx: -side * (5 + Math.random() * 3), vz: speed * 0.3 + Math.random() * 2,
+          ph: Math.random() * PI * 2, hit: false,
+          variant: Math.random(), trail: []
+        });
+        nextSkierZ = pZ + 35 + Math.random() * 45;
+      }
+      // Move + cleanup
+      for (let i = skiers.length - 1; i >= 0; i--) {
+        let sk = skiers[i];
+        sk.x += sk.vx * dt; sk.z += sk.vz * dt; sk.ph += dt * 8;
+        // Record ski trail (left/right ski positions, ~0.15 apart)
+        sk.trail.unshift({ lx: sk.x - 0.15, lz: sk.z, rx: sk.x + 0.15, rz: sk.z });
+        if (sk.trail.length > 80) sk.trail.length = 80;
+        if (sk.z < pZ - 20 || Math.abs(sk.x - pX) > 60) { skiers.splice(i, 1); continue; }
+        // Collision
+        if (!sk.hit && state === 1 && Math.abs(sk.z - pZ) < 0.7 && Math.abs(sk.x - pX) < 0.5) {
+          sk.hit = true; crashed = 1; state = 2; crashTimer = 1.5; playCrashSfx();
+          shakeX = (Math.random() - 0.5) * 20; shakeY = (Math.random() - 0.5) * 15;
+          for (let j = 0; j < 25; j++) {
+            particles.push({ x: pScrX + Math.random() * 20 - 10, y: pScrY + Math.random() * 10 - 5,
+              vx: (Math.random() - 0.5) * 8, vy: -Math.random() * 6 - 2,
+              life: 25 + Math.random() * 20 | 0, ml: 45, sz: 2 + Math.random() * 4 });
+          }
+          let finalDist = Math.floor(pZ);
+          if (finalDist > hiScore) { hiScore = finalDist; try { localStorage.setItem('hs', hiScore) } catch (e) {} }
+        }
+      }
+    }
+
+    function drawCrossingSkier(sx, sy, sc, dir, ph, fogT, variant) {
+      let skyR = dPh.fog[0], skyG = dPh.fog[1], skyB = dPh.fog[2];
+      function fogCol(r, gv, b) {
+        return `rgb(${(r * (1 - fogT) + skyR * fogT) | 0},${(gv * (1 - fogT) + skyG * fogT) | 0},${(b * (1 - fogT) + skyB * fogT) | 0})`;
+      }
+      g.save(); g.translate(sx, sy); g.scale(sc, sc);
+      if (dir < 0) g.scale(-1, 1);
+      let la = Math.sin(ph) * 0.5;
+      // Skis
+      g.fillStyle = fogCol(55, 55, 60); g.fillRect(-6, 1, 13, 1);
+      // Boots
+      g.fillStyle = fogCol(40, 40, 48);
+      g.fillRect(-4 + la, -1, 2, 2); g.fillRect(1 - la, -1, 2, 2);
+      // Legs
+      g.fillStyle = fogCol(35, 35, 45);
+      g.fillRect(-3 + la, -5, 2, 4); g.fillRect(0 - la, -5, 2, 4);
+      // Jacket
+      let jR, jG, jB;
+      if (variant < 0.25) { jR = 50; jG = 90; jB = 170; }
+      else if (variant < 0.5) { jR = 170; jG = 45; jB = 40; }
+      else if (variant < 0.75) { jR = 45; jG = 110; jB = 55; }
+      else { jR = 190; jG = 120; jB = 35; }
+      g.fillStyle = fogCol(jR, jG, jB); g.fillRect(-2, -9, 5, 5);
+      // Arms
+      g.fillRect(-4 + la, -8, 2, 3); g.fillRect(4 - la, -8, 2, 3);
+      // Poles
+      g.fillStyle = fogCol(140, 140, 145);
+      g.fillRect(-5 + la, -7, 1, 7); g.fillRect(5 - la, -7, 1, 7);
+      // Head
+      g.fillStyle = fogCol(210, 175, 145); g.fillRect(-1, -12, 3, 3);
+      // Hat
+      g.fillStyle = fogCol(Math.min(255, jR + 20), Math.min(255, jG + 20), Math.min(255, jB + 20));
+      g.fillRect(-1, -14, 3, 2);
+      // Goggles
+      g.fillStyle = fogCol(30, 30, 35); g.fillRect(0, -11, 2, 1);
+      g.restore();
     }
 
     function drawTree(sx, sy, sc, type, fogT, vr) {
@@ -670,17 +784,17 @@
         }
       } else if (type === 1) {
         let sz = sc * 6.4;
-        let bg = sz * 0.35; // bury into ground
-        if (vr < 0.33) {
+        let bg = sz * 0.35;
+        if (vr < 0.25) {
           // Angular rock
           g.fillStyle = fogCol(85, 90, 105);
           g.beginPath(); g.moveTo(sx - sz, sy + bg); g.lineTo(sx - sz * 0.7, sy - sz * 1.1); g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
           g.lineTo(sx + sz, sy - sz * 0.7); g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
           g.fillStyle = fogCol(120, 125, 140);
           g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.6); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.7, sy - sz * 0.8); g.closePath(); g.fill();
-          g.fillStyle = fogCol(225, 195, 170);
+          g.fillStyle = fogCol(210, 220, 230);
           g.beginPath(); g.moveTo(sx - sz * 0.4, sy - sz * 0.95); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.65, sy - sz * 0.8); g.closePath(); g.fill();
-        } else if (vr < 0.66) {
+        } else if (vr < 0.5) {
           // Round boulder
           g.fillStyle = fogCol(80, 85, 100);
           g.beginPath(); g.moveTo(sx - sz * 0.9, sy + bg); g.lineTo(sx - sz, sy - sz * 0.5); g.lineTo(sx - sz * 0.6, sy - sz * 1.1);
@@ -688,33 +802,201 @@
           g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
           g.fillStyle = fogCol(115, 120, 135);
           g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.7); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.closePath(); g.fill();
-          g.fillStyle = fogCol(225, 200, 175);
+          g.fillStyle = fogCol(210, 220, 230);
           g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.9); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.5, sy - sz * 0.85); g.closePath(); g.fill();
-        } else {
+        } else if (vr < 0.75) {
           // Flat wide slab
           g.fillStyle = fogCol(90, 95, 108);
           g.beginPath(); g.moveTo(sx - sz * 1.2, sy + bg); g.lineTo(sx - sz * 1.0, sy - sz * 0.6); g.lineTo(sx - sz * 0.2, sy - sz * 0.8);
           g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.lineTo(sx + sz * 1.1, sy - sz * 0.3); g.lineTo(sx + sz * 1.0, sy + bg); g.closePath(); g.fill();
           g.fillStyle = fogCol(125, 130, 142);
           g.beginPath(); g.moveTo(sx - sz * 0.5, sy - sz * 0.45); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.5, sy - sz * 0.55); g.closePath(); g.fill();
-          g.fillStyle = fogCol(225, 200, 175);
+          g.fillStyle = fogCol(210, 220, 230);
           g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.5); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.4, sy - sz * 0.55); g.closePath(); g.fill();
+        } else {
+          // Stacked jagged rocks
+          g.fillStyle = fogCol(78, 82, 98);
+          g.beginPath(); g.moveTo(sx - sz * 0.8, sy + bg); g.lineTo(sx - sz * 0.9, sy - sz * 0.4);
+          g.lineTo(sx - sz * 0.4, sy - sz * 0.9); g.lineTo(sx + sz * 0.15, sy - sz * 1.2);
+          g.lineTo(sx + sz * 0.5, sy - sz * 0.8); g.lineTo(sx + sz * 0.7, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(95, 100, 115);
+          g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.7);
+          g.lineTo(sx, sy - sz * 1.4); g.lineTo(sx + sz * 0.35, sy - sz * 0.9); g.closePath(); g.fill();
+          g.fillStyle = fogCol(215, 225, 235);
+          g.fillRect(sx - sz * 0.35, sy - sz * 0.72, sz * 0.55, sz * 0.08);
+          g.beginPath(); g.moveTo(sx - sz * 0.15, sy - sz * 1.1); g.lineTo(sx, sy - sz * 1.4); g.lineTo(sx + sz * 0.2, sy - sz * 1.1); g.closePath(); g.fill();
         }
-      } else {
-        // Bare tree - vary branch count and lean
+      } else if (type === 2) {
+        // Bare tree
         let h = sc * 14;
         let lean = (vr - 0.5) * sc * 2;
-        let nBranch = vr < 0.33 ? 3 : vr < 0.66 ? 4 : 5;
         g.strokeStyle = fogCol(60, 42, 25);
-        g.lineWidth = Math.max(1.5, sc * 1);
-        g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + lean, sy - h); g.stroke();
-        g.lineWidth = Math.max(1, sc * 0.6);
-        for (let i = 0; i < nBranch; i++) {
-          let t = 0.35 + i * 0.55 / nBranch;
-          let dir = (i % 2 === 0) ? -1 : 1;
-          let bx = sx + lean * t + dir * sc * (3 + vr * 3);
-          let by2 = sy - h * (t + 0.15 + vr * 0.05);
-          g.beginPath(); g.moveTo(sx + lean * t, sy - h * t); g.lineTo(bx, by2); g.stroke();
+        if (vr > 0.85) {
+          // Forked variant
+          g.lineWidth = Math.max(1.5, sc * 1);
+          let splitY = sy - h * 0.55;
+          g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + lean * 0.55, splitY); g.stroke();
+          g.lineWidth = Math.max(1, sc * 0.7);
+          g.beginPath(); g.moveTo(sx + lean * 0.55, splitY); g.lineTo(sx + lean - sc * 3, sy - h); g.stroke();
+          g.beginPath(); g.moveTo(sx + lean * 0.55, splitY); g.lineTo(sx + lean + sc * 3.5, sy - h * 0.9); g.stroke();
+          g.lineWidth = Math.max(1, sc * 0.4);
+          g.beginPath(); g.moveTo(sx + lean - sc * 2, sy - h * 0.85); g.lineTo(sx + lean - sc * 4.5, sy - h * 0.95); g.stroke();
+          g.beginPath(); g.moveTo(sx + lean + sc * 2.5, sy - h * 0.78); g.lineTo(sx + lean + sc * 5, sy - h * 0.88); g.stroke();
+        } else {
+          // Standard branched
+          let nBranch = vr < 0.2 ? 2 : vr < 0.5 ? 3 : vr < 0.8 ? 4 : 5;
+          g.lineWidth = Math.max(1.5, sc * 1);
+          g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + lean, sy - h); g.stroke();
+          g.lineWidth = Math.max(1, sc * 0.6);
+          for (let i = 0; i < nBranch; i++) {
+            let t = 0.35 + i * 0.55 / nBranch;
+            let dir = (i % 2 === 0) ? -1 : 1;
+            let bx = sx + lean * t + dir * sc * (3 + vr * 3);
+            let by2 = sy - h * (t + 0.15 + vr * 0.05);
+            g.beginPath(); g.moveTo(sx + lean * t, sy - h * t); g.lineTo(bx, by2); g.stroke();
+            if (nBranch >= 4 && i > 0) {
+              g.lineWidth = Math.max(1, sc * 0.35);
+              g.beginPath(); g.moveTo(bx, by2); g.lineTo(bx + dir * sc * (1 + vr), by2 - sc * (1 + vr * 0.5)); g.stroke();
+              g.lineWidth = Math.max(1, sc * 0.6);
+            }
+          }
+        }
+      } else if (type === 3) {
+        // Fallen log
+        let logLen = sc * (8 + vr * 6);
+        let logH = sc * (2.2 + vr * 1.2);
+        let angle = (vr - 0.5) * 0.3;
+        g.save(); g.translate(sx, sy); g.rotate(angle);
+        if (vr > 0.5) g.scale(-1, 1);
+        // Shadow
+        g.fillStyle = `rgba(0,0,0,${(0.12 * (1 - fogT)).toFixed(2)})`;
+        g.beginPath(); g.ellipse(0, logH * 0.1, logLen * 0.52, logH * 0.25, 0, 0, PI * 2); g.fill();
+        // Body
+        g.fillStyle = fogCol(72, 50, 28);
+        g.fillRect(-logLen / 2, -logH, logLen, logH);
+        // Bark highlight
+        g.fillStyle = fogCol(92, 65, 35);
+        g.fillRect(-logLen / 2, -logH, logLen, logH * 0.3);
+        // Dark underside
+        g.fillStyle = fogCol(52, 36, 18);
+        g.fillRect(-logLen / 2, -logH * 0.2, logLen, logH * 0.2);
+        // Clean-cut end
+        g.fillStyle = fogCol(88, 65, 38);
+        g.beginPath(); g.ellipse(-logLen / 2, -logH * 0.5, logH * 0.52, logH * 0.52, 0, 0, PI * 2); g.fill();
+        g.fillStyle = fogCol(105, 80, 50);
+        g.beginPath(); g.ellipse(-logLen / 2, -logH * 0.5, logH * 0.35, logH * 0.35, 0, 0, PI * 2); g.fill();
+        g.strokeStyle = fogCol(62, 42, 22); g.lineWidth = Math.max(1, sc * 0.15);
+        g.beginPath(); g.ellipse(-logLen / 2, -logH * 0.5, logH * 0.22, logH * 0.22, 0, 0, PI * 2); g.stroke();
+        g.beginPath(); g.ellipse(-logLen / 2, -logH * 0.5, logH * 0.08, logH * 0.08, 0, 0, PI * 2); g.stroke();
+        // Broken end
+        let bx = logLen / 2;
+        g.fillStyle = fogCol(60, 42, 22);
+        g.beginPath(); g.moveTo(bx, -logH * 0.05); g.lineTo(bx + logH * 0.15, -logH * 0.25);
+        g.lineTo(bx - logH * 0.1, -logH * 0.45); g.lineTo(bx + logH * 0.2, -logH * 0.65);
+        g.lineTo(bx + logH * 0.05, -logH * 0.85); g.lineTo(bx, -logH); g.closePath(); g.fill();
+        // Snow on top
+        g.fillStyle = fogCol(230, 240, 245);
+        g.fillRect(-logLen * 0.4, -logH * 1.05, logLen * 0.8, logH * 0.12);
+        g.restore();
+      } else if (type === 4) {
+        // Boulder cluster
+        let sz = sc * 8;
+        let bg = sz * 0.3;
+        // Main boulder
+        g.fillStyle = fogCol(72, 78, 92);
+        g.beginPath(); g.moveTo(sx - sz * 0.7, sy + bg); g.lineTo(sx - sz * 0.8, sy - sz * 0.5);
+        g.lineTo(sx - sz * 0.3, sy - sz * 0.9); g.lineTo(sx + sz * 0.2, sy - sz * 0.85);
+        g.lineTo(sx + sz * 0.6, sy - sz * 0.4); g.lineTo(sx + sz * 0.5, sy + bg); g.closePath(); g.fill();
+        g.fillStyle = fogCol(100, 106, 120);
+        g.beginPath(); g.moveTo(sx - sz * 0.2, sy - sz * 0.5); g.lineTo(sx + sz * 0.1, sy - sz * 0.85);
+        g.lineTo(sx + sz * 0.5, sy - sz * 0.45); g.closePath(); g.fill();
+        // Secondary boulder
+        let ox = vr > 0.5 ? sz * 0.6 : -sz * 0.5;
+        g.fillStyle = fogCol(80, 86, 100);
+        g.beginPath(); g.moveTo(sx + ox - sz * 0.4, sy + bg * 0.5); g.lineTo(sx + ox - sz * 0.35, sy - sz * 0.45);
+        g.lineTo(sx + ox + sz * 0.1, sy - sz * 0.6); g.lineTo(sx + ox + sz * 0.35, sy - sz * 0.3);
+        g.lineTo(sx + ox + sz * 0.3, sy + bg * 0.5); g.closePath(); g.fill();
+        // Third tiny rock
+        if (vr > 0.35) {
+          let ox2 = vr > 0.5 ? -sz * 0.4 : sz * 0.5;
+          g.fillStyle = fogCol(88, 92, 108);
+          g.beginPath(); g.moveTo(sx + ox2 - sz * 0.2, sy + bg * 0.3); g.lineTo(sx + ox2, sy - sz * 0.25);
+          g.lineTo(sx + ox2 + sz * 0.2, sy + bg * 0.3); g.closePath(); g.fill();
+        }
+        // Snow caps
+        g.fillStyle = fogCol(212, 222, 232);
+        g.beginPath(); g.moveTo(sx - sz * 0.4, sy - sz * 0.65); g.lineTo(sx - sz * 0.05, sy - sz * 0.9);
+        g.lineTo(sx + sz * 0.3, sy - sz * 0.6); g.closePath(); g.fill();
+        g.beginPath(); g.moveTo(sx + ox - sz * 0.15, sy - sz * 0.4); g.lineTo(sx + ox + sz * 0.05, sy - sz * 0.6);
+        g.lineTo(sx + ox + sz * 0.25, sy - sz * 0.35); g.closePath(); g.fill();
+      } else if (type === 5) {
+        // Big rock
+        let sz = sc * 14;
+        let bg = sz * 0.55;
+        // Main mass — base narrower than top so edges meet ground
+        g.fillStyle = fogCol(65, 70, 85);
+        g.beginPath(); g.moveTo(sx - sz * 0.5, sy + bg); g.lineTo(sx - sz * 1.0, sy - sz * 0.3);
+        g.lineTo(sx - sz * 0.75, sy - sz * 0.7); g.lineTo(sx - sz * 0.2, sy - sz * 1.05);
+        g.lineTo(sx + sz * 0.3, sy - sz * 1.1); g.lineTo(sx + sz * 0.7, sy - sz * 0.8);
+        g.lineTo(sx + sz * 0.95, sy - sz * 0.35); g.lineTo(sx + sz * 0.45, sy + bg); g.closePath(); g.fill();
+        // Right face
+        g.fillStyle = fogCol(90, 95, 112);
+        g.beginPath(); g.moveTo(sx + sz * 0.3, sy - sz * 1.1); g.lineTo(sx + sz * 0.7, sy - sz * 0.8);
+        g.lineTo(sx + sz * 0.95, sy - sz * 0.35); g.lineTo(sx + sz * 0.45, sy + bg);
+        g.lineTo(sx + sz * 0.1, sy + bg); g.lineTo(sx - sz * 0.05, sy - sz * 0.5); g.closePath(); g.fill();
+        // Top face
+        g.fillStyle = fogCol(105, 110, 128);
+        g.beginPath(); g.moveTo(sx - sz * 0.2, sy - sz * 1.05); g.lineTo(sx + sz * 0.3, sy - sz * 1.1);
+        g.lineTo(sx + sz * 0.7, sy - sz * 0.8); g.lineTo(sx + sz * 0.1, sy - sz * 0.7);
+        g.lineTo(sx - sz * 0.4, sy - sz * 0.65); g.closePath(); g.fill();
+        // Crack
+        g.strokeStyle = fogCol(45, 48, 60); g.lineWidth = Math.max(1, sc * 0.3);
+        g.beginPath(); g.moveTo(sx - sz * 0.15, sy - sz * 0.95); g.lineTo(sx - sz * 0.05, sy - sz * 0.5);
+        g.lineTo(sx + sz * 0.15, sy - sz * 0.1); g.stroke();
+        // Snow cap
+        g.fillStyle = fogCol(215, 225, 235);
+        g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.6); g.lineTo(sx - sz * 0.2, sy - sz * 1.05);
+        g.lineTo(sx + sz * 0.3, sy - sz * 1.1); g.lineTo(sx + sz * 0.6, sy - sz * 0.75);
+        g.lineTo(sx + sz * 0.1, sy - sz * 0.7); g.closePath(); g.fill();
+        // Snow ledge on crack
+        g.fillStyle = fogCol(210, 220, 232);
+        g.fillRect(sx - sz * 0.12, sy - sz * 0.52, sz * 0.25, sz * 0.06);
+      } else if (type === 6) {
+        // Tree clump (3-4 packed pines)
+        let baseH = sc * 22, baseW = sc * 10;
+        let gShift = (vr - 0.5) * 15;
+        let nTrees = vr < 0.3 ? 3 : 4;
+        let pos = [
+          { dx: -baseW * 0.8, dh: 0.85 + vr * 0.1, dw: 0.85 },
+          { dx: baseW * 0.6, dh: 0.95, dw: 0.95 },
+          { dx: -baseW * 0.05, dh: 1.1 + vr * 0.15, dw: 1.05 },
+          { dx: baseW * 1.2, dh: 0.78, dw: 0.75 }
+        ];
+        // Pass 1: trunks + green foliage
+        for (let ti = 0; ti < nTrees; ti++) {
+          let p = pos[ti], tx = sx + p.dx, th = baseH * p.dh, tw = baseW * 0.35 * p.dw;
+          g.fillStyle = fogCol(70, 45, 20);
+          g.fillRect(tx - sc * 0.15, sy - th * 0.15, sc * 0.3, th * 0.2);
+          for (let li = 0; li < 2; li++) {
+            let bY = sy - th * 0.15 - th * li * 0.25;
+            let tY = bY - th * 0.38;
+            let lw2 = tw * (1 - li * 0.2);
+            g.fillStyle = fogCol(18 + li * 10 + ti * 3, 60 + li * 12 + gShift + ti * 4, 25 + li * 5);
+            g.beginPath(); g.moveTo(tx - lw2, bY); g.lineTo(tx, tY); g.lineTo(tx + lw2, bY); g.closePath(); g.fill();
+          }
+        }
+        // Pass 2: snow on top
+        for (let ti = 0; ti < nTrees; ti++) {
+          let p = pos[ti], tx = sx + p.dx, th = baseH * p.dh, tw = baseW * 0.35 * p.dw;
+          for (let li = 0; li < 2; li++) {
+            let bY = sy - th * 0.15 - th * li * 0.25;
+            let tY = bY - th * 0.38;
+            let lw2 = tw * (1 - li * 0.2);
+            let snowBY = bY - (bY - tY) * 0.55;
+            let snowLw = lw2 * 0.5;
+            g.fillStyle = fogCol(228, 238, 244);
+            g.beginPath(); g.moveTo(tx - snowLw, snowBY); g.lineTo(tx, tY); g.lineTo(tx + snowLw, snowBY); g.closePath(); g.fill();
+          }
         }
       }
     }
@@ -754,20 +1036,78 @@
         let baseY = p.y;
         if (p.y < terrainSil[col]) baseY = terrainSil[col];
 
-        visible.push({ ob, p, wy, crest, baseY, scale: ob.scale || 1, variant: ob.variant || 0 });
+        visible.push({ kind: 'ob', ob, p, wy, crest, baseY, scale: ob.scale || 1, variant: ob.variant || 0 });
+      }
+      // Add skiers to visible array (same LOS occlusion as obstacles)
+      for (let i = 0; i < skiers.length; i++) {
+        let sk = skiers[i];
+        let wy = getHeight(sk.x, sk.z);
+        let p = project(sk.x, wy, sk.z);
+        if (p.z < 0.5 || p.z > 45 || p.x < -200 || p.x > W + 200) continue;
+        let maxExcess = 0, bestT = 0;
+        for (let s = 1; s < 12; s++) {
+          let t = s / 12;
+          let rx = camX + (sk.x - camX) * t, rz = camZ + (sk.z - camZ) * t;
+          let losY = camY + (wy - camY) * t;
+          let excess = getHeight(rx, rz) - losY;
+          if (excess > maxExcess) { maxExcess = excess; bestT = t; }
+        }
+        let crest = null;
+        if (maxExcess > 0) crest = { x: camX + (sk.x - camX) * bestT, z: camZ + (sk.z - camZ) * bestT };
+        let col = Math.round(Math.max(0, Math.min(W - 1, p.x)));
+        let baseY = p.y;
+        if (p.y < terrainSil[col]) baseY = terrainSil[col];
+        visible.push({ kind: 'sk', sk, p, baseY, crest });
       }
       visible.sort((a, b) => b.p.z - a.p.z);
       for (let i = 0; i < visible.length; i++) {
-        let { ob, p, wy, crest, baseY, scale, variant } = visible[i];
-        let sc = 80 / p.z * scale;
+        let v = visible[i];
+        let { p, baseY } = v;
         let fogT = Math.min(1, p.z * p.z * 0.0006);
+
+        if (v.kind === 'sk') {
+          // Crossing skier with crest occlusion
+          let sk = v.sk, sc2 = S * 0.036 / p.z;
+          g.save();
+          if (v.crest) {
+            let span = 12, ns = 10;
+            g.beginPath();
+            let firstX = v.crest.x - span;
+            let fp = project(firstX, getHeight(firstX, v.crest.z), v.crest.z);
+            g.moveTo(fp.x, 0);
+            let lastX = v.crest.x + span;
+            let lp = project(lastX, getHeight(lastX, v.crest.z), v.crest.z);
+            g.lineTo(lp.x, 0);
+            for (let j = ns; j >= 0; j--) {
+              let wx = v.crest.x + (j / ns - 0.5) * span * 2;
+              let cp = project(wx, getHeight(wx, v.crest.z), v.crest.z);
+              g.lineTo(cp.x, cp.y);
+            }
+            g.closePath(); g.clip();
+          }
+          g.beginPath(); g.rect(-20, 0, W + 40, baseY); g.clip();
+          // Snow spray
+          if (Math.random() < 0.35) {
+            g.fillStyle = `rgba(255,255,255,${(0.25 * (1 - fogT)).toFixed(2)})`;
+            g.fillRect(p.x + (Math.random() - 0.5) * sc2 * 8, baseY - Math.random() * sc2 * 4, sc2 * 2, sc2);
+          }
+          drawCrossingSkier(p.x, baseY, sc2, sk.vx > 0 ? 1 : -1, sk.ph, fogT, sk.variant);
+          g.restore();
+          continue;
+        }
+
+        let { ob, wy, crest, scale, variant } = v;
+        let sc = S * 0.107 / p.z * scale;
 
         // Directional shadow (sun from right)
         let shAlpha = 0.18 * (1 - fogT) * dPh.sunStr;
         let shLen = sc * 3.5, shW = sc * 0.5;
         if (ob.type === 0) shLen = sc * 4.5;
         else if (ob.type === 2) shLen = sc * 4.0;
-        else if (ob.type === 1) { shLen = sc * 2.5; shW = sc * 0.7; }
+        else if (ob.type === 1 || ob.type === 4) { shLen = sc * 2.5; shW = sc * 0.7; }
+        else if (ob.type === 3) { shLen = sc * 3; shW = sc * 0.8; }
+        else if (ob.type === 5) { shLen = sc * 5; shW = sc * 1; }
+        else if (ob.type === 6) shLen = sc * 5;
         g.save();
         g.translate(p.x, baseY);
         g.transform(1, 0, -0.6, 0.18, 0, 0);
@@ -777,20 +1117,14 @@
 
         g.save();
         if (crest) {
-          // Curved clip following the crest terrain profile
-          // Sample terrain heights across the crest at the blocking Z
-          let span = 12; // world units to sample across
-          let ns = 10;
+          let span = 12, ns = 10;
           g.beginPath();
-          // Top-left corner (visible region above crest)
           let firstX = crest.x - span;
           let fp = project(firstX, getHeight(firstX, crest.z), crest.z);
           g.moveTo(fp.x, 0);
-          // Top-right corner
           let lastX = crest.x + span;
           let lp = project(lastX, getHeight(lastX, crest.z), crest.z);
           g.lineTo(lp.x, 0);
-          // Follow crest curve right to left
           for (let j = ns; j >= 0; j--) {
             let wx = crest.x + (j / ns - 0.5) * span * 2;
             let h = getHeight(wx, crest.z);
@@ -801,7 +1135,6 @@
           g.clip();
         }
 
-        // Clip below ground so buried rock bases don't draw over terrain
         g.beginPath(); g.rect(-20, 0, W + 40, baseY); g.clip();
         drawTree(p.x, baseY, sc, ob.type, fogT, variant);
         g.restore();
@@ -817,8 +1150,9 @@
         let dz = ob.z - pZ;
         let dx = ob.x - pX;
         let s = ob.scale || 1;
-        let hx = ob.type === 1 ? 1.2 : 0.7;
-        if (Math.abs(dz) < 1.0 * s && Math.abs(dx) < hx * s) {
+        let hx = ob.type === 1 ? 1.2 : ob.type === 3 ? 1.8 : ob.type === 4 ? 1.3 : ob.type === 5 ? 1.8 : ob.type === 6 ? 1.5 : 0.7;
+        let hz = ob.type === 3 ? 0.6 : ob.type === 5 ? 1.5 : ob.type === 6 ? 1.2 : 1.0;
+        if (Math.abs(dz) < hz * s && Math.abs(dx) < hx * s) {
           ob.hit = true;
           // CRASH!
           crashed = 1;
@@ -927,9 +1261,10 @@
       if (Math.abs(shakeX) < 0.5) shakeX = 0;
       if (Math.abs(shakeY) < 0.5) shakeY = 0;
 
-      // Obstacles
+      // Obstacles & skiers
       spawnObstacles();
       cleanupObstacles();
+      if (state === 1) updateSkiers(dt);
       checkCollisions();
     }
 
@@ -946,34 +1281,34 @@
 
     function drawHUD() {
       if (state != 1) return;
-      let fs = Math.max(14, W * 0.04 | 0);
+      let fs = Math.max(14, S * 0.04 | 0);
       g.textAlign = 'left';
       g.font = 'bold ' + fs + 'px monospace';
       g.fillStyle = '#fff';
       snowText(Math.floor(pZ) + 'm', 10, fs + 5);
-      snowText(speed.toFixed(1) + ' mph', 10, fs * 2 + 10);
+      snowText(speed.toFixed(1) + ' mps', 10, fs * 2 + 10);
     }
 
     function drawTitle() {
       g.textAlign = 'center';
-      g.font = 'bold ' + Math.max(36, W * 0.1 | 0) + 'px monospace';
+      g.font = 'bold ' + Math.max(36, S * 0.1 | 0) + 'px monospace';
       g.fillStyle = 'rgb(255, 255, 200)';
       snowText("Scotty's", W / 2, H * 0.2);
 
       if (Date.now() % 1000 < 600) {
         g.fillStyle = '#fff';
-        g.font = 'bold ' + Math.max(18, W * 0.05 | 0) + 'px monospace';
+        g.font = 'bold ' + Math.max(18, S * 0.05 | 0) + 'px monospace';
         snowText('TAP TO START', W / 2, H * 0.62);
       }
 
       if (hiScore > 0) {
         g.fillStyle = '#ff0';
-        g.font = Math.max(14, W * 0.04 | 0) + 'px monospace';
+        g.font = Math.max(14, S * 0.04 | 0) + 'px monospace';
         snowText('Best: ' + hiScore + 'm', W / 2, H * 0.72);
       }
 
       g.fillStyle = 'rgba(255,230,190,0.5)';
-      g.font = Math.max(11, W * 0.03 | 0) + 'px monospace';
+      g.font = Math.max(11, S * 0.03 | 0) + 'px monospace';
       snowText('Touch sides to steer', W / 2, H * 0.82);
       snowText('Arrow keys / mouse on desktop', W / 2, H * 0.87);
     }
@@ -983,10 +1318,10 @@
       g.fillStyle = 'rgba(0,0,0,0.5)';
       g.fillRect(0, H * 0.2, W, H * 0.6);
       g.fillStyle = '#f44';
-      g.font = 'bold ' + Math.max(32, W * 0.09 | 0) + 'px monospace';
+      g.font = 'bold ' + Math.max(32, S * 0.09 | 0) + 'px monospace';
       snowText('CRASHED!', W / 2, H * 0.35);
       g.fillStyle = '#fff';
-      g.font = Math.max(15, W * 0.05 | 0) + 'px monospace';
+      g.font = Math.max(15, S * 0.05 | 0) + 'px monospace';
       snowText('Distance: ' + Math.floor(pZ) + 'm', W / 2, H * 0.47);
       if (Math.floor(pZ) >= hiScore && hiScore > 0) {
         g.fillStyle = '#ff0';
@@ -994,7 +1329,7 @@
       }
       if (Date.now() % 1000 < 600) {
         g.fillStyle = '#fff';
-        g.font = 'bold ' + Math.max(16, W * 0.045 | 0) + 'px monospace';
+        g.font = 'bold ' + Math.max(16, S * 0.045 | 0) + 'px monospace';
         snowText('TAP TO RETRY', W / 2, H * 0.68);
       }
     }
@@ -1007,7 +1342,7 @@
       camX = 0; camY = pY + 2; camZ = pZ - 3; camAngle = 0;
       score = 0; combo = 1; maxCombo = 1; crashed = 0; crashTimer = 0;
       particles = []; trailHist = []; shakeX = 0; shakeY = 0; prevSpd = 14; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
-      obstacles = []; lastSpawnZ = 0; spawnedCells = new Set(); dayT = 0;
+      obstacles = []; lastSpawnZ = 0; spawnedCells = new Set(); skiers = []; nextSkierZ = 50; dayT = 0;
     }
 
     let keys = {};
