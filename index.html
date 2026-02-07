@@ -18,7 +18,7 @@ let pX=0,pY=0,pZ=0;
 // Camera world position (smoothed, decoupled from player)
 let camX=0,camY=3,camZ=-5;
 // Player screen position (updated by render, used by particles)
-let pScrX=0,pScrY=0;
+let pScrX=0,pScrY=0,slopeVal=0;
 
 function lerp(a,b,t){return a+(b-a)*t}
 
@@ -59,32 +59,46 @@ g.lineTo(x2+w2,y2);g.lineTo(x2-w2,y2);
 g.fill();
 }
 
+// Mountain range with optional snow caps
+function drawMtn(by,h,s,c,ox,sc){
+g.fillStyle=c;g.beginPath();g.moveTo(-20,H);
+for(let i=-20;i<=W+20;i+=6){
+let w=i+ox,m=Math.sin(w*.005+s)*h*.4+Math.sin(w*.013+s*2.3)*h*.35+Math.sin(w*.027+s*4.7)*h*.25;
+g.lineTo(i,by-m);
+}
+g.lineTo(W+20,H);g.closePath();g.fill();
+if(sc){
+g.fillStyle=sc;g.beginPath();
+let sl=h*.45;
+g.moveTo(-20,by-sl);
+for(let i=-20;i<=W+20;i+=6){
+let w=i+ox,m=Math.sin(w*.005+s)*h*.4+Math.sin(w*.013+s*2.3)*h*.35+Math.sin(w*.027+s*4.7)*h*.25;
+g.lineTo(i,m>sl?by-m:by-sl);
+}
+g.lineTo(W+20,by-sl);g.closePath();g.fill();
+}
+}
+
 // === 4. RENDERING: Project world from camera perspective ===
 function render(){
 let horizon=H*0.38;
 let focal=H*0.5;
 
-// Sky gradient
-let grd=g.createLinearGradient(0,0,0,horizon+30);
-grd.addColorStop(0,'#4a8fc7');
-grd.addColorStop(0.85,'#b0d8f0');
-grd.addColorStop(1,'#dde5ec');
-g.fillStyle=grd;
-g.fillRect(0,0,W,horizon+30);
+// Full-screen sky gradient
+let skyG=g.createLinearGradient(0,0,0,H);
+skyG.addColorStop(0,'#3a7fb7');
+skyG.addColorStop(0.3,'#7ab8e0');
+skyG.addColorStop(0.55,'#c0ddf0');
+skyG.addColorStop(1,'#e0e8f0');
+g.fillStyle=skyG;
+g.fillRect(0,0,W,H);
 
-// Base snow fill
-g.fillStyle='#dde5ec';
-g.fillRect(0,horizon+20,W,H-horizon-20);
-
-// Mountains (parallax with camera)
-for(let i=0;i<6;i++){
-let mx=((i*W*0.22+camZ*0.3+i*197)%(W+200))-100;
-let mh=45+i*18;
-g.fillStyle='#7888a0';
-g.beginPath();g.moveTo(mx-100,horizon+10);g.lineTo(mx,horizon-mh);g.lineTo(mx+110,horizon+10);g.fill();
-g.fillStyle='#e0e8f0';
-g.beginPath();g.moveTo(mx-25,horizon-mh*0.5);g.lineTo(mx,horizon-mh);g.lineTo(mx+30,horizon-mh*0.5);g.fill();
-}
+// Mountain ranges with parallax (far to near, each fills to screen bottom)
+let px=-camX,fz=camZ*0.05,tr=turnRate*W*0.012;
+drawMtn(H*0.22,100,0.5,'#b0c0d4',px*0.15+fz*0.1+tr*0.15);
+drawMtn(H*0.30,85,1.7,'#9aabbd',px*0.35+fz*0.2+tr*0.3,'#d0dce8');
+drawMtn(H*0.38,65,3.1,'#8494a8',px*0.7+fz*0.5+tr*0.6);
+drawMtn(H*0.45,50,5.3,'#7080a0',px*1.2+fz*0.8+tr);
 
 let baseI=Math.floor(camZ);
 
@@ -132,15 +146,23 @@ else col=ch?'#d0d8e0':'#c0c8d0';
 D(f.sx,f.sy,f.tw,nr.sx,nr.sy+1,nr.tw,col);
 }
 
-// Speed lines
-if(speed>8&&state==1){
-g.strokeStyle='rgba(255,255,255,0.3)';
-g.lineWidth=1;
-for(let i=0;i<(speed-8)*2;i++){
-let lx=Math.random()*W;
-let ly=H*0.4+Math.random()*H*0.5;
-g.beginPath();g.moveTo(lx,ly);g.lineTo(lx+turnRate*5,ly+15+speed*2);g.stroke();
-}
+// Speed streaks (radial from vanishing point)
+if(speed>5&&state==1){
+let n=((speed-5)*1.5+Math.max(0,-slopeVal)*3)|0;
+let cx=W/2,cy=horizon;
+for(let i=0;i<n;i++){
+let a=Math.random()*PI*2;
+let r1=(0.15+Math.random()*0.35)*H;
+let r2=r1+10+speed*3;
+let x1=cx+Math.cos(a)*r1;
+let y1=cy+Math.sin(a)*r1*0.6;
+let x2=cx+Math.cos(a)*r2;
+let y2=cy+Math.sin(a)*r2*0.6;
+if(y1>horizon*0.7){
+g.strokeStyle=`rgba(255,255,255,${Math.min(0.4,(speed-5)*0.03)})`;
+g.lineWidth=1+speed*0.05;
+g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.stroke();
+}}
 }
 
 // === 5. RENDER PLAYER: Project player model within the world ===
@@ -244,13 +266,13 @@ if(state!=1)return;
 if(dt>0.1)dt=0.1;
 
 // === 2. PLAYER POSITIONING: Snap to ground ===
-// Slope from height function (sample ahead vs behind)
-let slopeAhead=getHeight(pX,pZ+2)-getHeight(pX,pZ-2);
-let slopeAngle=0.15+slopeAhead*0.008;
+// Slope: negative=downhill (fast), positive=uphill (slow)
+slopeVal=getHeight(pX,pZ+2)-getHeight(pX,pZ-2);
+let slope=0.12-slopeVal*0.06;
 
 let tt=terrainType(Math.floor(pZ));
 let friction=tt==0?0.015:tt==1?0.025:tt==2?0.008:0.02;
-let gravity=9.8*slopeAngle;
+let gravity=9.8*slope;
 let turnDrag=Math.abs(turnRate)*0.08;
 let dragMult=inputTuck?0.6:1;
 let airDrag=speed*speed*0.001*dragMult;
@@ -258,7 +280,7 @@ let airDrag=speed*speed*0.001*dragMult;
 speed+=gravity*dt;
 speed-=(friction+turnDrag)*speed*dt;
 speed-=airDrag*dt;
-speed=Math.max(2,Math.min(speed,20));
+speed=Math.max(1,Math.min(speed,25));
 
 // Steering
 let curv=curvature(pZ)*0.002;
@@ -306,6 +328,19 @@ if(combo>1){
 g.fillStyle='#ff0';
 g.fillText('Combo x'+combo+'!',10,fs*3+15);
 }
+// Elevation indicator (right side)
+g.save();
+g.translate(W-45,fs*1.5);
+let sa=Math.atan2(slopeVal,4);
+g.rotate(sa);
+g.fillStyle=slopeVal<-0.3?'#4f8':slopeVal>0.3?'#f84':'#aaa';
+g.beginPath();g.moveTo(18,0);g.lineTo(-8,-7);g.lineTo(-4,0);g.lineTo(-8,7);
+g.closePath();g.fill();
+g.restore();
+g.textAlign='right';
+g.fillStyle='#ccc';
+g.font=Math.max(11,W*0.03|0)+'px monospace';
+g.fillText((2000+Math.floor(pY*10))+'m',W-10,fs*3);
 }
 
 function drawTitle(){
