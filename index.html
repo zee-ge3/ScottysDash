@@ -166,10 +166,10 @@ g.beginPath();g.arc(sunX,sunY,10,0,PI*2);g.fill();
 
 // Mountain ranges with parallax (far to near, each fills to screen bottom)
 let px=-camAngle*W*0.6,fz=camZ*0.05;
-drawMtn(H*0.22,100,0.5,'#b0c0d4',px*0.15+fz*0.1,'#e8eef4',.2);
-drawMtn(H*0.30,85,1.7,'#9aabbd',px*0.35+fz*0.2,'#d0dce8',.35);
-drawMtn(H*0.38,65,3.1,'#8494a8',px*0.7+fz*0.5,'#c0cad6',.25);
-drawMtn(H*0.45,50,5.3,'#7080a0',px*1.2+fz*0.8);
+drawMtn(H*0.22,100,0.5,'#b0c0d4',-px*0.15+fz*0.2,'#e8eef4',.2);
+drawMtn(H*0.30,85,1.7,'#9aabbd',-px*0.35+fz*0.4,'#d0dce8',.35);
+drawMtn(H*0.38,65,3.1,'#8494a8',-px*0.7+fz*1,'#c0cad6',.25);
+drawMtn(H*0.45,50,5.3,'#7080a0',-px*1.2+fz*1.5);
 
 // 3D column raycaster terrain
 renderTerrain();
