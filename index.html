@@ -18,7 +18,7 @@ let pX=0,pY=0,pZ=0;
 // Camera world position (smoothed, decoupled from player)
 let camX=0,camY=3,camZ=-5;
 // Player screen position (updated by render, used by particles)
-let pScrX=0,pScrY=0,slopeVal=0,prevSpd=5,accelVal=0,smoothFov=0.5;
+let pScrX=0,pScrY=0,slopeVal=0,prevSpd=5,accelVal=0,smoothFov=0.65;
 
 function lerp(a,b,t){return a+(b-a)*t}
 
@@ -42,8 +42,8 @@ s.buffer=b;s.connect(audioCtx.destination);s.start();
 
 // === 1. SOURCE OF TRUTH: Height function ===
 function getHeight(x,z){
-return (Math.sin(z*0.009)*40+Math.sin(z*0.023)*20+Math.sin(z*0.051)*10
-+Math.sin(z*0.1)*8+Math.sin(x*0.04+z*0.012)*5)*0.25;
+return (Math.sin(z*0.018)*40+Math.sin(z*0.046)*20+Math.sin(z*0.102)*10
++Math.sin(z*0.2)*8+Math.sin(x*0.08+z*0.024)*5)*0.25-z*0.04;
 }
 
 // Visual curvature (lateral path bending for aesthetics)
@@ -147,7 +147,7 @@ for(let k=segs.length-1;k>0;k--){
 let f=segs[k],nr=segs[k-1];
 if(f.sy<-50&&nr.sy<-50)continue;
 
-let t=1-Math.max(0,Math.min(1,(f.gh+20)/40));
+let t=1-Math.max(0,Math.min(1,(f.gh-pY+8)/16));
 let col=`rgb(${138+t*102|0},${138+t*107|0},${138+t*112|0})`;
 
 D(f.sx,f.sy,f.tw,nr.sx,nr.sy+1,nr.tw,col);
@@ -295,7 +295,7 @@ if(dt>0.1)dt=0.1;
 // === 2. PLAYER POSITIONING: Snap to ground ===
 // Slope: negative=downhill (fast), positive=uphill (slow)
 slopeVal=getHeight(pX,pZ+2)-getHeight(pX,pZ-2);
-let slope=0.12-slopeVal*0.06;
+let slope=slopeVal<0?-slopeVal*0.12:-slopeVal*0.02;
 
 let tt=terrainType(Math.floor(pZ));
 let friction=tt==0?0.015:tt==1?0.025:tt==2?0.008:0.02;
@@ -307,7 +307,8 @@ let airDrag=speed*speed*0.001*dragMult;
 speed+=gravity*dt;
 speed-=(friction+turnDrag)*speed*dt;
 speed-=airDrag*dt;
-speed=Math.max(1,Math.min(speed,25));
+if(slopeVal>0)speed-=slopeVal*slopeVal*0.15*dt;
+speed=Math.max(5,Math.min(speed,25));
 accelVal=lerp(accelVal,Math.max(0,(speed-prevSpd)/dt),Math.min(1,dt*10));
 prevSpd=speed;
 
@@ -327,12 +328,12 @@ pY=getHeight(pX,pZ);
 score+=speed*dt*2;
 
 // === 3. CAMERA LOGIC: Spring arm with lerp ===
-smoothFov=lerp(smoothFov,0.5+slopeVal*0.07,Math.min(1,dt*3));
+smoothFov=lerp(smoothFov,0.65+slopeVal*0.07,Math.min(1,dt*3));
 let t=Math.min(1,dt*5);
 let dh=Math.max(0,-slopeVal);
 camX=lerp(camX,pX,t);
-camY=lerp(camY,pY+5+dh*0.5,Math.min(1,dt*2));
-camZ=lerp(camZ,pZ-5-dh*0.6,t);
+camY=lerp(camY,pY+2+dh*1.5,Math.min(1,dt*2));
+camZ=lerp(camZ,pZ-3-dh*0.6,t);
 
 // Snow effects
 if(Math.abs(turnRate)>0.5&&speed>3){
@@ -427,11 +428,13 @@ g.fillText('TAP TO RETRY',W/2,H*0.78);
 }
 
 function resetGame(){
-pX=0;pZ=0;pY=getHeight(0,0);
+pX=0;pZ=0;
+for(let z=0;z<200;z++){if(getHeight(0,z+2)-getHeight(0,z-2)<-0.3){pZ=z;break;}}
+pY=getHeight(0,pZ);
 speed=5;turnRate=0;
-camX=0;camY=pY+5;camZ=pZ-5;
+camX=0;camY=pY+2;camZ=pZ-3;
 score=0;combo=1;maxCombo=1;crashed=0;crashTimer=0;
-particles=[];shakeX=0;shakeY=0;prevSpd=5;accelVal=0;smoothFov=0.5;
+particles=[];shakeX=0;shakeY=0;prevSpd=5;accelVal=0;smoothFov=0.65;
 }
 
 let keys={};
@@ -486,9 +489,10 @@ if(state==2)drawGameOver();
 requestAnimationFrame(frame);
 }
 
-// Initialize
-pY=getHeight(0,0);
-camY=pY+5;
+// Initialize on downhill
+for(let z=0;z<200;z++){if(getHeight(0,z+2)-getHeight(0,z-2)<-0.3){pZ=z;break;}}
+pY=getHeight(0,pZ);
+camY=pY+2;camZ=pZ-3;
 lastTime=performance.now();
 requestAnimationFrame(frame);
 </script></body></html>
