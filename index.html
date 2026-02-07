@@ -1,0 +1,559 @@
+<!DOCTYPE html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,user-scalable=no"><title>Infinite Ski</title><style>*{margin:0;padding:0}body{background:#000;overflow:hidden;touch-action:none}canvas{display:block}</style></head><body><canvas id=c></canvas><script>
+// ZzFX Micro - Zuper Zmall Zound Zynth
+zzfx=(...z)=>{let Z=new(window.AudioContext||webkitAudioContext),b=Z.createBuffer(1,96e3,44100),d=b.getChannelData(0);z.map((v,i)=>d[i]=v);let s=Z.createBufferSource();s.buffer=b;s.connect(Z.destination);s.start()};
+zzfxG=(p=1,k=.05,b=.22,e=0,r=0,t=.1,u=0,f=1,v=0,z=0,w=0,A=0,l=0,B=0,C=0,D=0,d=0,g=1,h=0,I=0)=>{let a=2*Math.PI,c=44100,m=Math.max,s=v*=500*a/c/c,q=b*c|0,n=t*c|0,J=e*c|0,E=r*c|0,x=d*c|0,F=h*c|0,G=I*c|0,H=q+J+n+E+x,i=H,o=[],y=0,j=0,K=0;for(;K<i;K++){let L=K/c,M=K<q?K/q:K<q+J?1:K<H-E?m(0,1-(K-q-J)/n):K<H?m(0,1-((K-H+E)/E)):0;M=M<=0?0:M;y+=1+u*2*a/c;let N=Math.sin(y)*M*p*(1+B*Math.sin(2*a*L*l));j+=N;if(z||w||A){s+=w*500*a/c/c;v=z*500*a/c+s;j+=Math.sin(v)*A*M}o.push(D?K<F?0:K>H-G?0:N*(1+C*Math.sin(2*a*L*f)):N*(1+C*Math.sin(2*a*L*f)))}return o};
+zzfxP=(...s)=>{let Z=new(window.AudioContext||webkitAudioContext),m=s.flat(),b=Z.createBuffer(1,m.length,44100),d=b.getChannelData(0);m.map((v,i)=>d[i]=v);let n=Z.createBufferSource();n.buffer=b;n.connect(Z.destination);n.start()};
+
+let c=document.getElementById('c'),x=c.getContext('2d');
+let W,H;
+function resize(){W=c.width=innerWidth;H=c.height=innerHeight}
+resize();onresize=resize;
+
+// Game constants
+const SEG=200,DRAW=80,PI=Math.PI;
+// Game state
+let state=0; // 0=title,1=play,2=over
+let dist=0,speed=0,playerX=0,turnRate=0,score=0,combo=1,maxCombo=1,hiScore=+localStorage.getItem('hs')||0;
+let inputX=0,inputTuck=0,crashed=0,crashTimer=0;
+let particles=[],shakeX=0,shakeY=0;
+let lastTime=0;
+let audioUnlocked=0;
+
+// Sound presets
+let sndCarve,sndCrash,sndGate,sndWind;
+function initSounds(){
+if(audioUnlocked)return;
+audioUnlocked=1;
+try{
+sndCarve=zzfxG(.3,.02,.1,0,.05,.05,2,1.5,0,0,0,0,0,0,0,0,0,1,.01);
+sndCrash=zzfxG(1,.05,.5,.1,.1,.3,3,.5,0,0,0,0,0,5,0,.5,.1,1,.02);
+sndGate=zzfxG(.5,.01,.1,0,.1,.2,0,2,0,0,500,0,0,0,0,0,0,1,.01);
+}catch(e){}
+}
+
+// Terrain: deterministic from segment index
+function S(i){return Math.sin(i*0.017)*0.6+Math.sin(i*0.031)*0.3+Math.sin(i*0.073)*0.15}
+function curvature(i){return Math.sin(i*0.013)*3+Math.sin(i*0.029)*1.5+Math.sin(i*0.067)*0.8}
+function elevation(i){return Math.sin(i*0.009)*40+Math.sin(i*0.023)*20+Math.sin(i*0.051)*10}
+function terrainType(i){let v=(Math.sin(i*0.037)*0.5+0.5);if(i>500)v+=0.15;if(i>1500)v+=0.15;return v<0.25?0:v<0.6?1:v<0.8?2:3} // 0=packed,1=powder,2=ice,3=mogul
+
+// Obstacles: deterministic
+function getObstacles(i){
+let obs=[];
+let h=Math.sin(i*9.17+i*i*0.003)*43758.5453;
+h=h-Math.floor(h);
+let density=Math.min(0.4,0.08+i*0.0001);
+if(h<density){
+let ox=(Math.sin(i*7.31)*0.8); // -0.8 to 0.8 of road
+let type=h<density*0.5?0:h<density*0.85?1:2; // 0=tree,1=rock,2=gate
+obs.push({x:ox,type:type});
+}
+// Second obstacle at higher distances
+if(i>300){
+let h2=Math.sin(i*13.53+i*0.007)*29173.1;
+h2=h2-Math.floor(h2);
+if(h2<density*0.3){
+let ox2=Math.sin(i*11.07)*0.7;
+obs.push({x:ox2,type:0});
+}
+}
+return obs;
+}
+
+// Draw trapezoid
+function D(x1,y1,w1,x2,y2,w2,col){
+x.fillStyle=col;
+x.beginPath();
+x.moveTo(x1-w1,y1);
+x.lineTo(x1+w1,y1);
+x.lineTo(x2+w2,y2);
+x.lineTo(x2-w2,y2);
+x.fill();
+}
+
+// Project segment
+function project(i,cam){
+let dx=curvature(i)-curvature(cam|0);
+let dy=elevation(i)-elevation(cam|0);
+let dz=i-(cam||0);
+if(dz<=0)return null;
+let scale=300/dz;
+let sx=W/2+(dx-playerX*3)*scale+shakeX;
+let sy=H*0.45-dy*scale+dz*0.8*scale+shakeY;
+let sw=W*0.8*scale;
+return{x:sx,y:sy,w:sw,s:scale};
+}
+
+// Render
+function render(){
+// Sky gradient
+let grd=x.createLinearGradient(0,0,0,H*0.45);
+grd.addColorStop(0,'#4a8fc7');
+grd.addColorStop(1,'#a8d4f0');
+x.fillStyle=grd;
+x.fillRect(0,0,W,H*0.45+20);
+
+// Mountains
+x.fillStyle='#8899aa';
+for(let i=0;i<5;i++){
+let mx=W*0.15*i+((dist*0.02+i*137)%W);
+if(mx>W)mx-=W*1.2;
+x.beginPath();
+x.moveTo(mx-80,H*0.43);
+x.lineTo(mx,H*0.25+i*12);
+x.lineTo(mx+90,H*0.43);
+x.fill();
+}
+// Snow caps
+x.fillStyle='#e8eef4';
+for(let i=0;i<5;i++){
+let mx=W*0.15*i+((dist*0.02+i*137)%W);
+if(mx>W)mx-=W*1.2;
+x.beginPath();
+x.moveTo(mx-25,H*0.33+i*5);
+x.lineTo(mx,H*0.25+i*12);
+x.lineTo(mx+30,H*0.33+i*5);
+x.fill();
+}
+
+let camSeg=Math.floor(dist);
+let camOff=dist-camSeg;
+
+// Render terrain strips back to front
+let projected=[];
+for(let i=DRAW;i>=1;i--){
+let si=camSeg+i;
+let p=project(si,dist);
+if(!p||p.y<0||p.y>H*1.2)continue;
+projected.push({i:si,p:p,di:i});
+}
+
+for(let k=0;k<projected.length;k++){
+let {i:si,p,di}=projected[k];
+let nextP=project(si+1,dist);
+if(!nextP)continue;
+
+let tt=terrainType(si);
+let checker=(si%2==0);
+let col;
+if(tt==0)col=checker?'#e8eef4':'#dde5ec'; // packed snow
+else if(tt==1)col=checker?'#f0f5fa':'#e0e8f0'; // powder
+else if(tt==2)col=checker?'#c8d8e8':'#b8c8d8'; // ice
+else col=checker?'#d8e0e8':'#c8d0d8'; // mogul
+
+D(p.x,p.y,p.w,nextP.x,nextP.y,nextP.w,col);
+
+// Edge markers
+if(di<50){
+let edgeCol=checker?'#f44':'#c33';
+D(p.x-p.w,p.y,p.w*0.02,nextP.x-nextP.w,nextP.y,nextP.w*0.02,edgeCol);
+D(p.x+p.w,p.y,p.w*0.02,nextP.x+nextP.w,nextP.y,nextP.w*0.02,edgeCol);
+}
+
+// Obstacles
+let obs=getObstacles(si);
+for(let ob of obs){
+let ox=p.x+(ob.x-playerX)*p.w*2;
+let oy=p.y;
+let sc=p.s*2;
+if(sc<1)continue;
+if(ob.type==0){// Tree
+x.fillStyle='#2d5a27';
+x.beginPath();x.moveTo(ox,oy-sc*18);x.lineTo(ox-sc*6,oy-sc*3);x.lineTo(ox+sc*6,oy-sc*3);x.fill();
+x.beginPath();x.moveTo(ox,oy-sc*14);x.lineTo(ox-sc*8,oy-sc*1);x.lineTo(ox+sc*8,oy-sc*1);x.fill();
+x.fillStyle='#5a3a1a';
+x.fillRect(ox-sc*1.2,oy-sc*2,sc*2.4,sc*3);
+// Snow on tree
+x.fillStyle='#fff';
+x.beginPath();x.moveTo(ox,oy-sc*18);x.lineTo(ox-sc*3,oy-sc*13);x.lineTo(ox+sc*3,oy-sc*13);x.fill();
+}else if(ob.type==1){// Rock
+x.fillStyle='#667';
+x.beginPath();x.moveTo(ox-sc*4,oy);x.lineTo(ox-sc*3,oy-sc*5);x.lineTo(ox+sc*2,oy-sc*6);x.lineTo(ox+sc*5,oy-sc*2);x.lineTo(ox+sc*3,oy);x.fill();
+x.fillStyle='#778';
+x.beginPath();x.moveTo(ox-sc*2,oy-sc*1);x.lineTo(ox-sc*1,oy-sc*5);x.lineTo(ox+sc*2,oy-sc*6);x.lineTo(ox+sc*3,oy-sc*2);x.fill();
+}else{// Gate flags
+x.fillStyle='#33f';
+x.fillRect(ox-sc*12-1,oy-sc*16,2,sc*16);
+x.fillRect(ox+sc*12-1,oy-sc*16,2,sc*16);
+x.fillStyle='#33f';
+x.fillRect(ox-sc*12-1,oy-sc*16,sc*3,sc*4);
+x.fillRect(ox+sc*12-1,oy-sc*16,sc*3,sc*4);
+}
+}
+}
+
+// Speed lines at high velocity
+if(speed>8&&state==1){
+x.strokeStyle='rgba(255,255,255,0.3)';
+x.lineWidth=1;
+for(let i=0;i<(speed-8)*2;i++){
+let lx=Math.random()*W;
+let ly=H*0.4+Math.random()*H*0.5;
+x.beginPath();x.moveTo(lx,ly);x.lineTo(lx+turnRate*5,ly+15+speed*2);x.stroke();
+}
+}
+
+// Skier sprite
+drawSkier();
+
+// Particles
+for(let i=particles.length-1;i>=0;i--){
+let p=particles[i];
+p.x+=p.vx;p.y+=p.vy;p.vy+=0.1;p.life--;
+x.fillStyle=`rgba(255,255,255,${p.life/p.maxLife})`;
+x.fillRect(p.x,p.y,p.sz,p.sz);
+if(p.life<=0)particles.splice(i,1);
+}
+}
+
+function drawSkier(){
+let sx=W/2+shakeX,sy=H*0.72+shakeY;
+let lean=turnRate*0.3;
+let tuck=inputTuck;
+
+x.save();
+x.translate(sx,sy);
+x.rotate(lean*0.15);
+
+// Shadow
+x.fillStyle='rgba(0,0,0,0.15)';
+x.beginPath();x.ellipse(0,14,12,4,0,0,PI*2);x.fill();
+
+// Skis
+x.fillStyle='#225';
+let skiAngle=lean*0.2;
+x.save();x.rotate(skiAngle);
+x.fillRect(-10,8,3,22);
+x.fillRect(7,8,3,22);
+x.restore();
+
+// Legs
+x.fillStyle='#222';
+let legH=tuck?8:12;
+x.fillRect(-6,0,4,legH);
+x.fillRect(2,0,4,legH);
+
+// Body (red jacket)
+x.fillStyle='#d22';
+if(tuck){
+x.fillRect(-8,-6,16,8);
+}else{
+x.fillRect(-7,-14,14,16);
+}
+
+// Arms with poles
+x.strokeStyle='#222';
+x.lineWidth=2;
+let armY=tuck?-4:-8;
+// Left arm
+x.beginPath();x.moveTo(-7,armY);x.lineTo(-14+lean*3,armY+8);x.stroke();
+// Right arm
+x.beginPath();x.moveTo(7,armY);x.lineTo(14+lean*3,armY+8);x.stroke();
+// Poles
+x.strokeStyle='#999';
+x.lineWidth=1;
+x.beginPath();x.moveTo(-14+lean*3,armY+8);x.lineTo(-16+lean*4,armY+25);x.stroke();
+x.beginPath();x.moveTo(14+lean*3,armY+8);x.lineTo(16+lean*4,armY+25);x.stroke();
+
+// Head
+x.fillStyle='#fdb';
+let headY=tuck?-10:-18;
+x.beginPath();x.arc(0,headY,5,0,PI*2);x.fill();
+// Helmet
+x.fillStyle='#d22';
+x.beginPath();x.arc(0,headY-1,5,PI,0);x.fill();
+// Goggles
+x.fillStyle='#333';
+x.fillRect(-4,headY-2,8,3);
+
+x.restore();
+}
+
+// Spawn snow spray
+function spraySnow(){
+let sx=W/2,sy=H*0.74;
+for(let i=0;i<3;i++){
+particles.push({
+x:sx+(turnRate>0?-15:15),y:sy+10,
+vx:-turnRate*2+Math.random()*2-1,
+vy:-Math.random()*3-1,
+life:15+Math.random()*10|0,maxLife:25,
+sz:2+Math.random()*3
+});
+}
+}
+
+// Ambient snow
+function ambientSnow(){
+if(Math.random()<0.3+speed*0.05){
+particles.push({
+x:Math.random()*W,y:-5,
+vx:turnRate*0.5+Math.random()-0.5,
+vy:1+Math.random()*2+speed*0.3,
+life:60+Math.random()*40|0,maxLife:100,
+sz:1+Math.random()*2
+});
+}
+}
+
+// Collision
+function checkCollision(){
+let camSeg=Math.floor(dist);
+for(let i=2;i<6;i++){
+let si=camSeg+i;
+let obs=getObstacles(si);
+let dz=si-dist;
+if(dz<1.5||dz>4)continue;
+for(let ob of obs){
+let dx=Math.abs(ob.x-playerX);
+if(ob.type==2){// Gate
+if(dx<0.15&&dz<3){
+score+=50*combo;
+combo=Math.min(combo+1,10);
+if(combo>maxCombo)maxCombo=combo;
+if(sndGate)try{zzfxP(sndGate)}catch(e){}
+}
+}else{
+let hitW=ob.type==0?0.06:0.08;
+if(dx<hitW){
+if(ob.type==0){// Tree = crash
+crashed=1;
+crashTimer=2;
+state=2;
+shakeX=10;shakeY=10;
+if(sndCrash)try{zzfxP(sndCrash)}catch(e){}
+let hs=Math.floor(score);
+if(hs>hiScore){hiScore=hs;localStorage.setItem('hs',hs)}
+}else{// Rock = penalty
+speed*=0.4;
+combo=1;
+shakeX=5;shakeY=5;
+if(sndCrash)try{zzfxP(sndCrash)}catch(e){}
+}
+}
+}
+}
+}
+}
+
+// Update
+function update(dt){
+if(state!=1)return;
+if(dt>0.1)dt=0.1;
+
+// Slope steepness
+let camSeg=Math.floor(dist);
+let slopeAngle=0.15+(elevation(camSeg+5)-elevation(camSeg))*0.003;
+
+// Terrain friction
+let tt=terrainType(camSeg);
+let friction=tt==0?0.015:tt==1?0.025:tt==2?0.008:0.02;
+
+// Gravity acceleration
+let gravity=9.8*slopeAngle;
+
+// Turning costs speed
+let turnDrag=Math.abs(turnRate)*0.08;
+
+// Tuck reduces drag
+let dragMult=inputTuck?0.6:1;
+
+// Air drag
+let airDrag=speed*speed*0.001*dragMult;
+
+// Apply physics
+speed+=gravity*dt;
+speed-=(friction+turnDrag)*speed*dt;
+speed-=airDrag*dt;
+speed=Math.max(2,Math.min(speed,20));
+
+// Lateral movement
+let curv=curvature(camSeg)*0.002;
+turnRate+=(inputX*1.5-turnRate)*dt*4;
+playerX+=turnRate*dt*0.8;
+playerX+=curv*speed*dt*0.1;
+
+// Clamp player
+if(Math.abs(playerX)>0.9){
+playerX=Math.sign(playerX)*0.9;
+speed*=0.95;
+}
+
+// Forward
+dist+=speed*dt*0.5;
+
+// Score
+score+=speed*dt*2;
+
+// Snow spray on hard turns
+if(Math.abs(turnRate)>0.5&&speed>3){
+spraySnow();
+if(Math.random()<0.05&&sndCarve)try{zzfxP(sndCarve)}catch(e){}
+}
+
+ambientSnow();
+
+// Shake decay
+shakeX*=0.85;shakeY*=0.85;
+if(Math.abs(shakeX)<0.5)shakeX=0;
+if(Math.abs(shakeY)<0.5)shakeY=0;
+
+// Collisions
+checkCollision();
+}
+
+// HUD
+function drawHUD(){
+x.fillStyle='rgba(0,0,0,0.4)';
+x.font='bold '+Math.max(14,W*0.04|0)+'px monospace';
+x.textAlign='left';
+
+if(state==1){
+let fs=Math.max(14,W*0.04|0);
+x.fillStyle='#fff';
+x.fillText('Score: '+Math.floor(score),10,fs+5);
+x.fillText('Speed: '+speed.toFixed(1),10,fs*2+10);
+if(combo>1){
+x.fillStyle='#ff0';
+x.fillText('Combo x'+combo+'!',10,fs*3+15);
+}
+}
+}
+
+// Title screen
+function drawTitle(){
+x.textAlign='center';
+// Title
+x.fillStyle='#fff';
+x.font='bold '+Math.max(36,W*0.1|0)+'px monospace';
+x.fillText('INFINITE',W/2,H*0.28);
+x.fillText('SKI',W/2,H*0.38);
+
+// Subtitle
+x.font=Math.max(14,W*0.04|0)+'px monospace';
+x.fillStyle='rgba(255,255,255,0.7)';
+x.fillText('Dodge trees, hit gates, go fast!',W/2,H*0.48);
+
+// Tap prompt (blinking)
+if(Date.now()%1000<600){
+x.fillStyle='#fff';
+x.font='bold '+Math.max(18,W*0.05|0)+'px monospace';
+x.fillText('TAP TO START',W/2,H*0.62);
+}
+
+// High score
+if(hiScore>0){
+x.fillStyle='#ff0';
+x.font=Math.max(14,W*0.04|0)+'px monospace';
+x.fillText('Best: '+hiScore,W/2,H*0.72);
+}
+
+// Controls hint
+x.fillStyle='rgba(255,255,255,0.5)';
+x.font=Math.max(11,W*0.03|0)+'px monospace';
+x.fillText('Touch sides to steer | Bottom = tuck',W/2,H*0.82);
+x.fillText('Arrow keys / mouse on desktop',W/2,H*0.87);
+}
+
+// Game over screen
+function drawGameOver(){
+x.textAlign='center';
+
+x.fillStyle='rgba(0,0,0,0.5)';
+x.fillRect(0,H*0.2,W,H*0.6);
+
+x.fillStyle='#f44';
+x.font='bold '+Math.max(32,W*0.09|0)+'px monospace';
+x.fillText('CRASHED!',W/2,H*0.35);
+
+x.fillStyle='#fff';
+x.font=Math.max(18,W*0.05|0)+'px monospace';
+x.fillText('Score: '+Math.floor(score),W/2,H*0.47);
+x.fillText('Distance: '+Math.floor(dist)+'m',W/2,H*0.54);
+if(maxCombo>1)x.fillText('Max Combo: x'+maxCombo,W/2,H*0.61);
+
+if(Math.floor(score)>=hiScore&&hiScore>0){
+x.fillStyle='#ff0';
+x.fillText('NEW HIGH SCORE!',W/2,H*0.68);
+}
+
+if(Date.now()%1000<600){
+x.fillStyle='#fff';
+x.font='bold '+Math.max(16,W*0.045|0)+'px monospace';
+x.fillText('TAP TO RETRY',W/2,H*0.78);
+}
+}
+
+// Reset game
+function resetGame(){
+dist=0;speed=5;playerX=0;turnRate=0;
+score=0;combo=1;maxCombo=1;crashed=0;crashTimer=0;
+particles=[];shakeX=0;shakeY=0;
+}
+
+// Input handlers
+let keys={};
+let mouseDown=0,mouseX=0,mouseY=0;
+
+onkeydown=e=>{keys[e.key]=1;if(state!=1)startOrRetry()};
+onkeyup=e=>{keys[e.key]=0};
+
+function handlePointer(e){
+e.preventDefault();
+let t=e.touches?e.touches[0]:e;
+mouseX=t.clientX;mouseY=t.clientY;
+mouseDown=1;
+}
+c.addEventListener('touchstart',e=>{
+initSounds();
+handlePointer(e);
+if(state!=1)startOrRetry();
+},{passive:false});
+c.addEventListener('touchmove',e=>{handlePointer(e)},{passive:false});
+c.addEventListener('touchend',e=>{e.preventDefault();mouseDown=0},{passive:false});
+c.addEventListener('mousedown',e=>{initSounds();mouseDown=1;mouseX=e.clientX;mouseY=e.clientY;if(state!=1)startOrRetry()});
+c.addEventListener('mousemove',e=>{if(mouseDown){mouseX=e.clientX;mouseY=e.clientY}});
+c.addEventListener('mouseup',()=>{mouseDown=0});
+
+function startOrRetry(){
+if(state==0){state=1;resetGame()}
+else if(state==2&&crashTimer<=0){state=0}
+}
+
+function processInput(){
+inputX=0;inputTuck=0;
+
+if(keys['ArrowLeft']||keys['a'])inputX=-1;
+if(keys['ArrowRight']||keys['d'])inputX=1;
+if(keys['ArrowDown']||keys['s'])inputTuck=1;
+
+if(mouseDown){
+let rx=(mouseX-W/2)/(W/2);
+inputX=Math.max(-1,Math.min(1,rx*1.5));
+if(mouseY>H*0.7)inputTuck=1;
+}
+}
+
+// Main loop
+function frame(t){
+let dt=(t-lastTime)/1000;
+lastTime=t;
+if(dt>0.2)dt=0.016;
+
+processInput();
+if(state==1)update(dt);
+if(state==2){crashTimer-=dt;shakeX*=0.9;shakeY*=0.9}
+
+// Render
+render();
+drawHUD();
+if(state==0)drawTitle();
+if(state==2)drawGameOver();
+
+requestAnimationFrame(frame);
+}
+
+// Start
+lastTime=performance.now();
+requestAnimationFrame(frame);
+</script></body></html>
