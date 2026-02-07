@@ -727,14 +727,34 @@
 
     function drawTitle() {
       g.textAlign = 'center';
-      g.fillStyle = '#fff';
-      g.font = 'bold ' + Math.max(36, W * 0.1 | 0) + 'px monospace';
-      g.fillText('Scotty\'s', W / 2, H * 0.28);
-      g.fillText('Dash', W / 2, H * 0.38);
+      // Draw "Scotty's" first (background layer)
+      g.font='bold '+Math.max(36,W*0.1|0)+'px monospace'; // Original font for Scotty's
+      g.fillStyle='rgb(255, 255, 200)'; // Light yellow for Scotty's
+      g.fillText("Scotty's",W/2, H*0.24); // Position more to the left and higher
 
-      g.font = Math.max(14, W * 0.04 | 0) + 'px monospace';
-      g.fillStyle = 'rgba(255,255,255,0.7)';
-      g.fillText('Don\'t be late for class!', W / 2, H * 0.48);
+      // Draw "DASH" second (foreground layer), slightly lower and to the right
+      g.font='bold '+Math.max(50,W*0.15|0)+'px monospace'; // Larger font for DASH
+      g.fillStyle='rgb(255, 100, 0)'; // Sunset color for DASH
+      g.fillText('DASH', W/2,H*0.42); // Position lower and more to the right
+
+      /*
+      // Left side: "Don't be late to class"
+      g.save(); // Save current canvas state
+      g.translate(W * 0.15, H *0.6); // Move origin to desired text center
+      g.rotate(-Math.PI / 6); // Rotate 90 degrees counter-clockwise
+      g.textAlign='center'; // Center text on the new origin
+      g.fillStyle='rgb(255, 255, 0)'; // Yellow color
+      g.font='bold '+Math.max(10, W * 0.025 | 0)+'px monospace'; // Small font
+      let message1 = "Don't be late";
+      let message2 = "to class!";
+      let lineHeight = Math.max(10, W * 0.025 | 0) * 1.2; // Approximate line height based on font size
+
+      // Draw first line
+      g.fillText(message1, 0, -lineHeight / 2); // Center message1 slightly above origin
+      // Draw second line
+      g.fillText(message2, 0, lineHeight /  2); // Center message2 slightly below origin
+      g.restore(); // Restore canvas state
+      */
 
       if (Date.now() % 1000 < 600) { 
         g.fillStyle = '#fff';
