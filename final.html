@@ -44,7 +44,7 @@
     let camX = 0, camY = 3, camZ = -5;
     let camAngle = 0;
     // Player screen position (updated by render, used by particles)
-    let pScrX = 0, pScrY = 0, pScrSc = 1, slopeVal = 0, lateralSlope = 0, prevSpd = 7.5, accelVal = 0, smoothFov = 0.65, dogTurn = 0;
+    let pScrX = 0, pScrY = 0, pScrSc = 1, slopeVal = 0, lateralSlope = 0, prevSpd = 14, accelVal = 0, smoothFov = 0.65, dogTurn = 0;
     // Terrain silhouette buffer - stores top-most rendered pixel and its depth per screen column
     let terrainSil = [], terrainSilD = [];
 
@@ -200,7 +200,7 @@
       if (state == 1 || state == 2) renderObstacles();
 
       // Speed streaks (from player)
-      if (speed >= 13 && state == 1) {
+      if (speed >= 20 && state == 1) {
         let spdF = 10 + (speed - 13) * 14 / 17;
         let n = spdF | 0;
         for (let i = 0; i < n; i++) {
@@ -378,8 +378,9 @@
     }
 
     function spawnObstacles() {
-      // Cell size in world units
-      let cellZ = 5, cellX = 6;
+      // Small cells = dense obstacles, shrinks further with progression
+      let cellZ = Math.max(1.8, 3 - pZ / 2000);
+      let cellX = Math.max(2.2, 3.5 - pZ / 2000);
       // Range around player to populate
       let rangeX = 60; // far left/right of player
       let rangeZbehind = 10, rangeZahead = 80;
@@ -402,24 +403,25 @@
           let r2 = seedRand(cx * 37, cz * 73);
           let r3 = seedRand(cz * 113, cx * 191);
 
-          // ~60% chance a cell has an obstacle (density increases over time)
-          let density = 0.55 + Math.min(0.25, pZ / 2000);
-          if (r1 > density) continue;
-
           // Position within cell
           let oz = cz * cellZ + r2 * cellZ;
           let ox = cx * cellX + r3 * cellX;
 
-          // Don't spawn right on top of player start
-          if (oz < 20 && Math.abs(ox) < 8) continue;
+          // Don't spawn near player at game start
+          if (oz < pZ + 30 && oz > pZ - 5 && Math.abs(ox - pX) < 10 && score < 100) continue;
 
-          // Leave a safe corridor near the player's current path
-          // (only for obstacles at roughly the same Z)
+          // Density: 50% (0-2000) → 70% (2000-4000) → 90% (4000+)
+          // Obstacles directly ahead always spawn to force weaving
+          let density = pZ < 2000 ? 0.275 : pZ < 4000 ? 0.275 + 0.075 * (pZ - 2000) / 2000 : 0.35 + 0.075 * Math.min(1, (pZ - 4000) / 2000);
           let dzToPlayer = oz - pZ;
-          if (dzToPlayer > 5 && dzToPlayer < 20 && Math.abs(ox - pX) < 3) continue;
+          let dxToPlayer = Math.abs(ox - pX);
+          let aheadCenter = dzToPlayer > 5 && dzToPlayer < 25 && dxToPlayer < 4;
+          if (!aheadCenter && r1 > density) continue;
 
           let type = r2 < 0.5 ? 0 : r2 < 0.8 ? 1 : 2;
-          obstacles.push({ x: ox, z: oz, type, hit: false });
+          let scale = 0.6 + seedRand(cz * 7, cx * 13) * 0.8;
+          let variant = seedRand(cz * 31, cx * 59);
+          obstacles.push({ x: ox, z: oz, type, hit: false, scale, variant, key });
         }
       }
     }
@@ -428,99 +430,87 @@
     let spawnedCells = new Set();
 
     function cleanupObstacles() {
-      let cellZ = 5, cellX = 6;
       for (let i = obstacles.length - 1; i >= 0; i--) {
         let ob = obstacles[i];
-        // Remove if far behind or far to the side
         if (ob.z < pZ - 25 || Math.abs(ob.x - pX) > 80) {
-          // Also remove the cell key so it can respawn if we come back (won't happen in practice)
-          let cz = Math.floor(ob.z / cellZ);
-          let cx = Math.floor(ob.x / cellX);
-          spawnedCells.delete(cz * 10000 + cx);
+          spawnedCells.delete(ob.key);
           obstacles.splice(i, 1);
         }
       }
     }
 
-    function drawTree(sx, sy, sc, type, fogT) {
-      // Fog blends colors toward sky
+    function drawTree(sx, sy, sc, type, fogT, vr) {
       let skyR = 192, skyG = 221, skyB = 240;
       function fogCol(r, gv, b) {
         return `rgb(${(r * (1 - fogT) + skyR * fogT) | 0},${(gv * (1 - fogT) + skyG * fogT) | 0},${(b * (1 - fogT) + skyB * fogT) | 0})`;
       }
       if (type === 0) {
-        // Pine tree - triangle layers
+        // Pine tree - 3 layers always, vary width (narrow/normal/bushy)
+        let wMul = vr < 0.33 ? 0.7 : vr < 0.66 ? 1 : 1.2;
         let h = sc * 16;
-        let w = sc * 7.2;
-        // Trunk
+        let w = sc * 7.2 * wMul;
         g.fillStyle = fogCol(70, 45, 20);
         g.fillRect(sx - sc * 0.2, sy - h * 0.15, sc * 0.4, h * 0.2);
-        // Tree layers (bottom to top)
         for (let i = 0; i < 3; i++) {
           let ly = sy - h * 0.15 - h * i * 0.22;
           let lw = w * (1 - i * 0.22);
-          // Dark green body
           g.fillStyle = fogCol(20 + i * 8, 70 + i * 10, 30 + i * 5);
-          g.beginPath();
-          g.moveTo(sx - lw, ly);
-          g.lineTo(sx, ly - h * 0.32);
-          g.lineTo(sx + lw, ly);
-          g.closePath();
-          g.fill();
+          g.beginPath(); g.moveTo(sx - lw, ly); g.lineTo(sx, ly - h * 0.32); g.lineTo(sx + lw, ly); g.closePath(); g.fill();
         }
-        // Snow on branches
         g.fillStyle = fogCol(230, 240, 245);
         for (let i = 0; i < 3; i++) {
           let ly = sy - h * 0.15 - h * i * 0.22;
           let lw = w * (1 - i * 0.22) * 0.65;
-          g.beginPath();
-          g.moveTo(sx - lw, ly - h * 0.04);
-          g.lineTo(sx, ly - h * 0.32);
-          g.lineTo(sx + lw, ly - h * 0.04);
-          g.closePath();
-          g.fill();
+          g.beginPath(); g.moveTo(sx - lw, ly - h * 0.04); g.lineTo(sx, ly - h * 0.32); g.lineTo(sx + lw, ly - h * 0.04); g.closePath(); g.fill();
         }
       } else if (type === 1) {
-        // Rock
         let sz = sc * 6.4;
-        g.fillStyle = fogCol(85, 90, 105);
-        g.beginPath();
-        g.moveTo(sx - sz, sy);
-        g.lineTo(sx - sz * 0.7, sy - sz * 1.1);
-        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
-        g.lineTo(sx + sz, sy - sz * 0.7);
-        g.lineTo(sx + sz * 0.8, sy);
-        g.closePath();
-        g.fill();
-        // Highlight
-        g.fillStyle = fogCol(120, 125, 140);
-        g.beginPath();
-        g.moveTo(sx - sz * 0.6, sy - sz * 0.6);
-        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
-        g.lineTo(sx + sz * 0.7, sy - sz * 0.8);
-        g.closePath();
-        g.fill();
-        // Snow cap
-        g.fillStyle = fogCol(210, 220, 230);
-        g.beginPath();
-        g.moveTo(sx - sz * 0.4, sy - sz * 0.95);
-        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
-        g.lineTo(sx + sz * 0.65, sy - sz * 0.8);
-        g.closePath();
-        g.fill();
+        let bg = sz * 0.35; // bury into ground
+        if (vr < 0.33) {
+          // Angular rock
+          g.fillStyle = fogCol(85, 90, 105);
+          g.beginPath(); g.moveTo(sx - sz, sy + bg); g.lineTo(sx - sz * 0.7, sy - sz * 1.1); g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
+          g.lineTo(sx + sz, sy - sz * 0.7); g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(120, 125, 140);
+          g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.6); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.7, sy - sz * 0.8); g.closePath(); g.fill();
+          g.fillStyle = fogCol(210, 220, 230);
+          g.beginPath(); g.moveTo(sx - sz * 0.4, sy - sz * 0.95); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.65, sy - sz * 0.8); g.closePath(); g.fill();
+        } else if (vr < 0.66) {
+          // Round boulder
+          g.fillStyle = fogCol(80, 85, 100);
+          g.beginPath(); g.moveTo(sx - sz * 0.9, sy + bg); g.lineTo(sx - sz, sy - sz * 0.5); g.lineTo(sx - sz * 0.6, sy - sz * 1.1);
+          g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.7, sy - sz * 1.0); g.lineTo(sx + sz * 0.9, sy - sz * 0.4);
+          g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(115, 120, 135);
+          g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.7); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.closePath(); g.fill();
+          g.fillStyle = fogCol(210, 220, 230);
+          g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.9); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.5, sy - sz * 0.85); g.closePath(); g.fill();
+        } else {
+          // Flat wide slab
+          g.fillStyle = fogCol(90, 95, 108);
+          g.beginPath(); g.moveTo(sx - sz * 1.2, sy + bg); g.lineTo(sx - sz * 1.0, sy - sz * 0.6); g.lineTo(sx - sz * 0.2, sy - sz * 0.8);
+          g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.lineTo(sx + sz * 1.1, sy - sz * 0.3); g.lineTo(sx + sz * 1.0, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(125, 130, 142);
+          g.beginPath(); g.moveTo(sx - sz * 0.5, sy - sz * 0.45); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.5, sy - sz * 0.55); g.closePath(); g.fill();
+          g.fillStyle = fogCol(215, 225, 235);
+          g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.5); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.4, sy - sz * 0.55); g.closePath(); g.fill();
+        }
       } else {
-        // Bare tree / dead tree
+        // Bare tree - vary branch count and lean
         let h = sc * 14;
+        let lean = (vr - 0.5) * sc * 2;
+        let nBranch = vr < 0.33 ? 3 : vr < 0.66 ? 4 : 5;
         g.strokeStyle = fogCol(60, 42, 25);
         g.lineWidth = Math.max(1.5, sc * 1);
-        // Trunk
-        g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx, sy - h); g.stroke();
-        // Branches
+        g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + lean, sy - h); g.stroke();
         g.lineWidth = Math.max(1, sc * 0.6);
-        g.beginPath(); g.moveTo(sx, sy - h * 0.45); g.lineTo(sx - sc * 5.2, sy - h * 0.65); g.stroke();
-        g.beginPath(); g.moveTo(sx, sy - h * 0.58); g.lineTo(sx + sc * 6, sy - h * 0.78); g.stroke();
-        g.beginPath(); g.moveTo(sx, sy - h * 0.72); g.lineTo(sx - sc * 3.2, sy - h * 0.92); g.stroke();
-        g.beginPath(); g.moveTo(sx, sy - h * 0.85); g.lineTo(sx + sc * 2.4, sy - h * 0.98); g.stroke();
+        for (let i = 0; i < nBranch; i++) {
+          let t = 0.35 + i * 0.55 / nBranch;
+          let dir = (i % 2 === 0) ? -1 : 1;
+          let bx = sx + lean * t + dir * sc * (3 + vr * 3);
+          let by2 = sy - h * (t + 0.15 + vr * 0.05);
+          g.beginPath(); g.moveTo(sx + lean * t, sy - h * t); g.lineTo(bx, by2); g.stroke();
+        }
       }
     }
 
@@ -559,13 +549,13 @@
         let baseY = p.y;
         if (p.y < terrainSil[col]) baseY = terrainSil[col];
 
-        visible.push({ ob, p, wy, crest, baseY });
+        visible.push({ ob, p, wy, crest, baseY, scale: ob.scale || 1, variant: ob.variant || 0 });
       }
       visible.sort((a, b) => b.p.z - a.p.z);
       for (let i = 0; i < visible.length; i++) {
-        let { ob, p, wy, crest, baseY } = visible[i];
-        let sc = 80 / p.z;
-        let fogT = Math.min(1, p.z * p.z * 0.0004);
+        let { ob, p, wy, crest, baseY, scale, variant } = visible[i];
+        let sc = 80 / p.z * scale;
+        let fogT = Math.min(1, p.z * p.z * 0.0006);
 
         g.save();
         if (crest) {
@@ -593,11 +583,9 @@
           g.clip();
         }
 
-        // Shadow on ground
-        g.fillStyle = `rgba(0,0,0,${0.15 * (1 - fogT)})`;
-        let shSz = sc * 0.8;
-        g.beginPath(); g.ellipse(p.x, baseY + shSz * 0.15, shSz * 1.2, shSz * 0.25, 0, 0, PI * 2); g.fill();
-        drawTree(p.x, baseY, sc, ob.type, fogT);
+        // Clip below ground so buried rock bases don't draw over terrain
+        g.beginPath(); g.rect(-20, 0, W + 40, baseY); g.clip();
+        drawTree(p.x, baseY, sc, ob.type, fogT, variant);
         g.restore();
       }
     }
@@ -605,19 +593,20 @@
     function checkCollisions() {
       // Only the rider triggers a crash - rider sits at pX, pZ
       // Rider body is narrow (~0.6 world units wide)
-      let hitRadiusX = 0.7;
-      let hitRadiusZ = 1.0;
       for (let i = 0; i < obstacles.length; i++) {
         let ob = obstacles[i];
         if (ob.hit) continue;
         let dz = ob.z - pZ;
         let dx = ob.x - pX;
-        if (Math.abs(dz) < hitRadiusZ && Math.abs(dx) < hitRadiusX) {
+        let s = ob.scale || 1;
+        let hx = ob.type === 1 ? 1.2 : 0.7;
+        if (Math.abs(dz) < 1.0 * s && Math.abs(dx) < hx * s) {
           ob.hit = true;
           // CRASH!
           crashed = 1;
           state = 2;
           crashTimer = 1.5;
+          playCrashSfx();
           // Screen shake
           shakeX = (Math.random() - 0.5) * 20;
           shakeY = (Math.random() - 0.5) * 15;
@@ -657,18 +646,25 @@
       let dragMult = inputTuck ? 0.6 : 1;
       let airDrag = speed * speed * 0.001 * dragMult;
 
+      // Progressive difficulty: speed floor/cap and steering scale with score
+      let prog = Math.min(1, score / 8000);
+      let rampUp = Math.min(1, pZ / 30);
+      let minSpd = rampUp * 14 + prog * 10;
+      let maxSpd = 35 + prog * 15;
+      let steerMul = 1 + prog * 0.6;
+
       speed += gravity * dt;
       speed -= (friction + turnDrag) * speed * dt;
       speed -= airDrag * dt;
       if (slopeVal > 0) speed -= slopeVal * slopeVal * 0.15 * dt;
-      speed = Math.max(7.5, Math.min(speed, 30));
+      speed = Math.max(minSpd, Math.min(speed, maxSpd));
       accelVal = lerp(accelVal, Math.max(0, (speed - prevSpd) / dt), Math.min(1, dt * 10));
       prevSpd = speed;
 
       // Steering
       let curv = curvature(pZ) * 0.002;
-      turnRate += (inputX * 2.5 - turnRate) * dt * .6;
-      pX += dogTurn * dt * 4.0;
+      turnRate += (inputX * 2.5 * steerMul - turnRate) * dt * .6;
+      pX += dogTurn * dt * 4.0 * steerMul;
       pX += curv * speed * dt * 0.1;
 
       // Move forward
@@ -801,10 +797,10 @@
       pX = 0; pZ = 0;
       for (let z = 0; z < 200; z++) { if (getHeight(0, z + 2) - getHeight(0, z - 2) < -0.3) { pZ = z; break; } }
       pY = getHeight(0, pZ);
-      speed = 7.5; turnRate = 0;
+      speed = 0; turnRate = 0;
       camX = 0; camY = pY + 2; camZ = pZ - 3; camAngle = 0;
       score = 0; combo = 1; maxCombo = 1; crashed = 0; crashTimer = 0;
-      particles = []; shakeX = 0; shakeY = 0; prevSpd = 7.5; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
+      particles = []; shakeX = 0; shakeY = 0; prevSpd = 14; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
       obstacles = []; lastSpawnZ = 0; spawnedCells = new Set();
     }
 
@@ -826,7 +822,167 @@
     c.addEventListener('mousemove', e => { if (mouseDown) { mouseX = e.clientX; mouseY = e.clientY } });
     c.addEventListener('mouseup', () => { mouseDown = 0 });
 
+    // === AUDIO SYSTEM ===
+    let ax, aInited = 0, aM, noiseBuf;
+    let aWindG, aWindF, wg2, aPadG, padF, padOscs = [], aRunG, aRunF, aCarvG, aCarvF, aCarvF2, aChimeG;
+    let chordIdx = 0, chordTimer = 7, chimeTimer = 3, arpStep = 0, arpTimer = 1;
+    let carveBurst = 0, prevTurnAbs = 0, carveVol = 0;
+    let chords = [[65.4,130.8,164.8,196],[55,130.8,164.8,196],[43.7,130.8,164.8,174.6],[49,123.5,146.8,196]];
+    let chimeScales = [[523.3,659.3,784,1046.5,1318.5],[523.3,659.3,784,880,1046.5],[523.3,587.3,698.5,880,1046.5],[587.3,784,988,1174.7,1568]];
+
+    function initAudio() {
+      if (aInited) return;
+      ax = new (window.AudioContext || window.webkitAudioContext)();
+      aInited = 1;
+      // Master gain
+      aM = ax.createGain(); aM.gain.value = 0.6; aM.connect(ax.destination);
+      // Shared noise buffer
+      noiseBuf = ax.createBuffer(1, ax.sampleRate, ax.sampleRate);
+      let nd = noiseBuf.getChannelData(0);
+      for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+
+      // Wind main
+      let wn = ax.createBufferSource(); wn.buffer = noiseBuf; wn.loop = true;
+      aWindF = ax.createBiquadFilter(); aWindF.type = 'bandpass'; aWindF.frequency.value = 400; aWindF.Q.value = 0.35;
+      aWindG = ax.createGain(); aWindG.gain.value = 0.15;
+      wn.connect(aWindF); aWindF.connect(aWindG); aWindG.connect(aM); wn.start();
+
+      // Wind gust
+      let wn2 = ax.createBufferSource(); wn2.buffer = noiseBuf; wn2.loop = true;
+      let wf2 = ax.createBiquadFilter(); wf2.type = 'bandpass'; wf2.frequency.value = 180; wf2.Q.value = 0.4;
+      wg2 = ax.createGain(); wg2.gain.value = 0.04;
+      wn2.connect(wf2); wf2.connect(wg2); wg2.connect(aM); wn2.start();
+      let wLfo = ax.createOscillator(); wLfo.type = 'sine'; wLfo.frequency.value = 0.15;
+      let wLfoG = ax.createGain(); wLfoG.gain.value = 0.06;
+      wLfo.connect(wLfoG); wLfoG.connect(wg2.gain); wLfo.start();
+
+      // Pad chords
+      padF = ax.createBiquadFilter(); padF.type = 'lowpass'; padF.frequency.value = 600; padF.Q.value = 0.3;
+      aPadG = ax.createGain(); aPadG.gain.value = 0.04;
+      padF.connect(aPadG); aPadG.connect(aM);
+      for (let i = 0; i < 4; i++) {
+        let o = ax.createOscillator(); o.type = 'triangle'; o.frequency.value = chords[0][i];
+        o.connect(padF); o.start(); padOscs.push(o);
+      }
+      let pLfo = ax.createOscillator(); pLfo.type = 'sine'; pLfo.frequency.value = 0.06;
+      let pLfoG = ax.createGain(); pLfoG.gain.value = 0.03;
+      pLfo.connect(pLfoG); pLfoG.connect(aPadG.gain); pLfo.start();
+      let pLfo2 = ax.createOscillator(); pLfo2.type = 'sine'; pLfo2.frequency.value = 0.13;
+      let pLfo2G = ax.createGain(); pLfo2G.gain.value = 0.5;
+      pLfo2.connect(pLfo2G); pLfo2G.connect(padOscs[2].detune); pLfo2.start();
+
+      // Runner hiss
+      let rn = ax.createBufferSource(); rn.buffer = noiseBuf; rn.loop = true;
+      aRunF = ax.createBiquadFilter(); aRunF.type = 'highpass'; aRunF.frequency.value = 2000; aRunF.Q.value = 0.3;
+      aRunG = ax.createGain(); aRunG.gain.value = 0;
+      rn.connect(aRunF); aRunF.connect(aRunG); aRunG.connect(aM); rn.start();
+
+      // Carve
+      let cn = ax.createBufferSource(); cn.buffer = noiseBuf; cn.loop = true;
+      aCarvF = ax.createBiquadFilter(); aCarvF.type = 'bandpass'; aCarvF.frequency.value = 600; aCarvF.Q.value = 0.6;
+      aCarvF2 = ax.createBiquadFilter(); aCarvF2.type = 'peaking'; aCarvF2.frequency.value = 1200; aCarvF2.gain.value = 5; aCarvF2.Q.value = 0.5;
+      aCarvG = ax.createGain(); aCarvG.gain.value = 0;
+      cn.connect(aCarvF); aCarvF.connect(aCarvF2); aCarvF2.connect(aCarvG); aCarvG.connect(aM); cn.start();
+
+      // Chime bus
+      aChimeG = ax.createGain(); aChimeG.gain.value = 0.4; aChimeG.connect(aM);
+    }
+
+    function playChime() {
+      let sc = chimeScales[chordIdx];
+      let f = sc[(Math.random() * sc.length) | 0];
+      let t = ax.currentTime;
+      let g1 = ax.createGain(); g1.gain.setValueAtTime(0, t); g1.gain.linearRampToValueAtTime(0.15, t + 0.25);
+      g1.gain.setTargetAtTime(0, t + 0.3, 0.7 + Math.random() * 0.8); g1.connect(aChimeG);
+      let o1 = ax.createOscillator(); o1.type = 'sine'; o1.frequency.value = f; o1.connect(g1); o1.start(t); o1.stop(t + 5);
+      let g2 = ax.createGain(); g2.gain.value = 0.25; g2.connect(g1);
+      let o2 = ax.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.003; o2.connect(g2); o2.start(t); o2.stop(t + 5);
+      let g3 = ax.createGain(); g3.gain.value = 0.08; g3.connect(g1);
+      let o3 = ax.createOscillator(); o3.type = 'sine'; o3.frequency.value = f * 3.01; o3.connect(g3); o3.start(t); o3.stop(t + 5);
+    }
+
+    function playArpPhrase() {
+      let sc = chimeScales[chordIdx];
+      let n = 2 + ((Math.random() * 2) | 0);
+      let base = (Math.random() * (sc.length - n)) | 0;
+      let t = ax.currentTime;
+      for (let i = 0; i < n; i++) {
+        let f = sc[base + i];
+        let gt = ax.createGain(); gt.gain.setValueAtTime(0, t + i * 0.18);
+        gt.gain.linearRampToValueAtTime(0.12, t + i * 0.18 + 0.03);
+        gt.gain.setTargetAtTime(0, t + i * 0.18 + 0.05, 0.5 + Math.random() * 0.4); gt.connect(aChimeG);
+        let o = ax.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(gt); o.start(t + i * 0.18); o.stop(t + i * 0.18 + 4);
+        let g2 = ax.createGain(); g2.gain.value = 0.25; g2.connect(gt);
+        let o2 = ax.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.003; o2.connect(g2); o2.start(t + i * 0.18); o2.stop(t + i * 0.18 + 4);
+      }
+    }
+
+    function playBgArp() {
+      let sc = chimeScales[chordIdx];
+      let f = sc[arpStep % sc.length] * 0.5;
+      let t = ax.currentTime;
+      let gt = ax.createGain(); gt.gain.setValueAtTime(0.06 + Math.random() * 0.03, t);
+      gt.gain.setTargetAtTime(0, t + 0.05, 0.6); gt.connect(aChimeG);
+      let o = ax.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(gt); o.start(t); o.stop(t + 3);
+      arpStep++;
+    }
+
+    function playCrashSfx() {
+      if (!aInited) return;
+      let len = (ax.sampleRate * 0.3) | 0;
+      let nb = ax.createBuffer(1, len, ax.sampleRate);
+      let nd = nb.getChannelData(0);
+      for (let i = 0; i < len; i++) nd[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ax.sampleRate * 0.08));
+      let bs = ax.createBufferSource(); bs.buffer = nb;
+      let cf = ax.createBiquadFilter(); cf.type = 'lowpass'; cf.frequency.value = 800;
+      let cg = ax.createGain(); cg.gain.value = 1.0;
+      bs.connect(cf); cf.connect(cg); cg.connect(aM); bs.start();
+    }
+
+    function updateAudio(dt) {
+      let spd = Math.max(0, Math.min(1, (speed - 14) / 36));
+      // Wind
+      aWindG.gain.value = 0.04 + spd * 0.06;
+      aWindF.frequency.value = 250 + spd * 600;
+      // Runner hiss
+      aRunG.gain.value = spd * 0.04;
+      aRunF.frequency.value = 1500 + spd * 2500;
+      // Carve
+      let ta = Math.abs(turnRate);
+      let turnDelta = ta - prevTurnAbs;
+      if (turnDelta > 0.005 && ta > 0.15) carveBurst = Math.min(1, carveBurst + turnDelta * 8);
+      carveBurst *= Math.max(0, 1 - dt * 2.5);
+      let steady = Math.min(1, ta * 1.2) * Math.max(0.3, spd) * 0.03;
+      carveVol = carveBurst * 0.1 + steady;
+      aCarvG.gain.value = carveVol;
+      aCarvF.frequency.value = 400 + ta * 350 + carveBurst * 200;
+      aCarvF.Q.value = 0.5 + carveBurst * 1.0;
+      prevTurnAbs = ta;
+      // Chord progression
+      chordTimer -= dt;
+      if (chordTimer <= 0) {
+        chordIdx = (chordIdx + 1) % 4;
+        let t = ax.currentTime;
+        for (let i = 0; i < 4; i++) padOscs[i].frequency.setTargetAtTime(chords[chordIdx][i], t, 1.5);
+        chordTimer = 6 + Math.random() * 3;
+      }
+      // Chimes
+      if (state == 1) {
+        chimeTimer -= dt;
+        if (chimeTimer <= 0) {
+          if (Math.random() < 0.3) { playArpPhrase(); chimeTimer = 4 + Math.random() * 5; }
+          else { playChime(); chimeTimer = 2 + Math.random() * 4; }
+        }
+        arpTimer -= dt;
+        if (arpTimer <= 0) { playBgArp(); arpTimer = 0.8 + Math.random() * 0.4; }
+      }
+      // Master fade on crash
+      if (state == 2) aM.gain.value = Math.max(0.15, aM.gain.value - dt * 0.5);
+      else aM.gain.value = Math.min(0.6, aM.gain.value + dt * 0.3);
+    }
+
     function startOrRetry() {
+      initAudio();
       if (state == 0) { state = 1; resetGame() }
       else if (state == 2 && crashTimer <= 0) { state = 0 }
     }
@@ -852,6 +1008,7 @@
       if (state == 1) update(dt);
       if (state == 2) { crashTimer -= dt; shakeX *= 0.9; shakeY *= 0.9 }
 
+      if (aInited) updateAudio(dt);
       render();
       drawHUD();
       if (state == 0) drawTitle();
