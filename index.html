@@ -12,7 +12,7 @@ let state=0,dist=0,speed=0,playerX=0,turnRate=0;
 let score=0,combo=1,maxCombo=1,hiScore=+localStorage.getItem('hs')||0;
 let inputX=0,inputTuck=0,crashed=0,crashTimer=0;
 let particles=[],shakeX=0,shakeY=0;
-let lastTime=0,audioCtx,sndCarve,sndCrash,sndGate;
+let lastTime=0,audioCtx,sndCarve;
 
 function initAudio(){
 if(audioCtx)return;
@@ -20,8 +20,6 @@ try{
 audioCtx=new(window.AudioContext||webkitAudioContext);
 audioCtx.resume();
 sndCarve=zzfxG(.3,.02,.08,0,.04,.04,2,1.5);
-sndCrash=zzfxG(1,.05,.4,.1,.08,.3,3,.5,0,0,0,0,0,5,0,.5,.1);
-sndGate=zzfxG(.5,.01,.08,0,.08,.15,0,2,0,0,500);
 }catch(e){}
 }
 function playBuf(buf){
@@ -39,25 +37,6 @@ function curvature(i){return Math.sin(i*0.013)*5+Math.sin(i*0.029)*3+Math.sin(i*
 function elevation(i){return Math.sin(i*0.009)*40+Math.sin(i*0.023)*20+Math.sin(i*0.051)*10}
 function terrainType(i){let v=Math.sin(i*0.037)*0.5+0.5;if(i>500)v+=0.15;if(i>1500)v+=0.15;return v<0.25?0:v<0.6?1:v<0.8?2:3}
 
-// Obstacles
-function getObs(i){
-let o=[];
-let h=Math.sin(i*9.17+i*i*0.003)*43758.5453;
-h=h-Math.floor(h);
-let den=Math.min(0.4,0.08+i*0.0001);
-if(h<den){
-let ox=Math.sin(i*7.31)*0.75;
-let tp=h<den*0.5?0:h<den*0.85?1:2;
-o.push({x:ox,t:tp});
-}
-if(i>300){
-let h2=Math.sin(i*13.53+i*0.007)*29173.1;
-h2=h2-Math.floor(h2);
-if(h2<den*0.3)o.push({x:Math.sin(i*11.07)*0.65,t:0});
-}
-return o;
-}
-
 // Draw trapezoid
 function D(x1,y1,w1,x2,y2,w2,col){
 g.fillStyle=col;
@@ -70,23 +49,24 @@ g.fill();
 function render(){
 let horizon=H*0.38;
 
-// Fill entire canvas with base snow color (no black gaps)
-g.fillStyle='#dde5ec';
-g.fillRect(0,0,W,H);
-
-// Sky gradient
-let grd=g.createLinearGradient(0,0,0,horizon+10);
+// Sky gradient (extends past horizon so no gap with terrain)
+let grd=g.createLinearGradient(0,0,0,horizon+30);
 grd.addColorStop(0,'#4a8fc7');
-grd.addColorStop(1,'#b0d8f0');
+grd.addColorStop(0.85,'#b0d8f0');
+grd.addColorStop(1,'#dde5ec');
 g.fillStyle=grd;
-g.fillRect(0,0,W,horizon+10);
+g.fillRect(0,0,W,horizon+30);
 
-// Mountains with parallax
+// Base snow fill below sky
+g.fillStyle='#dde5ec';
+g.fillRect(0,horizon+20,W,H-horizon-20);
+
+// Mountains with parallax (bases extend below horizon)
 for(let i=0;i<6;i++){
 let mx=((i*W*0.22+dist*0.3+i*197)%(W+200))-100;
 let mh=45+i*18;
 g.fillStyle='#7888a0';
-g.beginPath();g.moveTo(mx-90,horizon);g.lineTo(mx,horizon-mh);g.lineTo(mx+100,horizon);g.fill();
+g.beginPath();g.moveTo(mx-100,horizon+10);g.lineTo(mx,horizon-mh);g.lineTo(mx+110,horizon+10);g.fill();
 g.fillStyle='#e0e8f0';
 g.beginPath();g.moveTo(mx-25,horizon-mh*0.5);g.lineTo(mx,horizon-mh);g.lineTo(mx+30,horizon-mh*0.5);g.fill();
 }
@@ -109,12 +89,10 @@ let elev=(elevation(si)-elevation(baseI))*1.5;
 let sy=horizon+(H*0.64-elev)/dz+shakeY;
 // X position: road center shifts with accumulated curve and player offset
 let sx=W/2+(accCurve-playerX)*W*0.4/dz+shakeX;
-// Terrain width: very wide so it always fills the screen
-let tw=W*2.5/dz;
-// Obstacle position scale (narrower than terrain)
-let ow=W*0.4/dz;
+// Terrain width: min W ensures full coverage at all distances
+let tw=Math.max(W,W*2.5/dz);
 
-segs.push({si:si,sx:sx,sy:sy,tw:tw,ow:ow,dz:dz});
+segs.push({si:si,sx:sx,sy:sy,tw:tw,dz:dz});
 }
 
 // Render strips far to near (painter's algorithm)
@@ -133,46 +111,6 @@ else col=ch?'#d0d8e0':'#c0c8d0';
 // Draw terrain strip (+1px overlap to prevent hairline gaps)
 D(f.sx,f.sy,f.tw,nr.sx,nr.sy+1,nr.tw,col);
 
-// Edge markers (red poles along sides)
-if(f.dz>1&&f.dz<30){
-let ec=ch?'#e44':'#c33';
-let ew=Math.max(1,f.ow*0.015);
-let ewn=Math.max(1,nr.ow*0.015);
-D(f.sx-f.ow,f.sy,ew,nr.sx-nr.ow,nr.sy,ewn,ec);
-D(f.sx+f.ow,f.sy,ew,nr.sx+nr.ow,nr.sy,ewn,ec);
-}
-
-// Obstacles on this segment
-let obs=getObs(f.si);
-for(let ob of obs){
-let ox=f.sx+(ob.x-playerX)*f.ow*2;
-let oy=f.sy;
-let sc=Math.min(W,H)*0.04/f.dz;
-if(sc<1.5)continue;
-
-if(ob.t==0){// Tree
-g.fillStyle='#2d5a27';
-g.beginPath();g.moveTo(ox,oy-sc*3);g.lineTo(ox-sc*1.2,oy-sc*0.5);g.lineTo(ox+sc*1.2,oy-sc*0.5);g.fill();
-g.beginPath();g.moveTo(ox,oy-sc*2.2);g.lineTo(ox-sc*1.5,oy);g.lineTo(ox+sc*1.5,oy);g.fill();
-g.fillStyle='#5a3a1a';
-g.fillRect(ox-sc*0.2,oy,sc*0.4,sc*0.6);
-g.fillStyle='#fff';
-g.beginPath();g.moveTo(ox,oy-sc*3);g.lineTo(ox-sc*0.5,oy-sc*2.2);g.lineTo(ox+sc*0.5,oy-sc*2.2);g.fill();
-}else if(ob.t==1){// Rock
-g.fillStyle='#667';
-g.beginPath();g.moveTo(ox-sc,oy);g.lineTo(ox-sc*0.6,oy-sc*1.2);g.lineTo(ox+sc*0.4,oy-sc*1.4);g.lineTo(ox+sc,oy-sc*0.4);g.lineTo(ox+sc*0.8,oy);g.fill();
-g.fillStyle='#889';
-g.beginPath();g.moveTo(ox-sc*0.3,oy-sc*0.2);g.lineTo(ox,oy-sc*1.3);g.lineTo(ox+sc*0.7,oy-sc*0.5);g.fill();
-}else{// Gate
-let gw=f.ow*0.35;
-g.strokeStyle='#33f';g.lineWidth=Math.max(2,sc*0.15);
-g.beginPath();g.moveTo(ox-gw,oy);g.lineTo(ox-gw,oy-sc*2.5);g.stroke();
-g.beginPath();g.moveTo(ox+gw,oy);g.lineTo(ox+gw,oy-sc*2.5);g.stroke();
-g.fillStyle='#33f';
-g.fillRect(ox-gw,oy-sc*2.5,sc*0.5,sc*0.6);
-g.fillRect(ox+gw-sc*0.1,oy-sc*2.5,sc*0.5,sc*0.6);
-}
-}
 }
 
 // Speed lines
@@ -203,9 +141,11 @@ function drawSkier(){
 let sx=W/2+shakeX,sy=H*0.7+shakeY;
 let lean=turnRate*0.3;
 let tuck=inputTuck;
+let S=1.8; // sprite scale
 
 g.save();
 g.translate(sx,sy);
+g.scale(S,S);
 g.rotate(lean*0.15);
 
 // Shadow
@@ -276,42 +216,6 @@ sz:1+Math.random()*2
 }
 }
 
-function checkCollision(){
-let camSeg=Math.floor(dist);
-for(let i=1;i<6;i++){
-let si=camSeg+i;
-let obs=getObs(si);
-let dz=si-dist;
-if(dz<1||dz>3.5)continue;
-for(let ob of obs){
-let dx=Math.abs(ob.x-playerX);
-if(ob.t==2){// Gate
-if(dx<0.18&&dz>1.5&&dz<2.5){
-score+=50*combo;
-combo=Math.min(combo+1,10);
-if(combo>maxCombo)maxCombo=combo;
-playBuf(sndGate);
-}
-}else{
-let hitW=ob.t==0?0.07:0.09;
-if(dx<hitW){
-if(ob.t==0){// Tree = crash
-crashed=1;crashTimer=2;state=2;
-shakeX=10;shakeY=10;
-playBuf(sndCrash);
-let hs=Math.floor(score);
-if(hs>hiScore){hiScore=hs;localStorage.setItem('hs',hs)}
-}else{// Rock = penalty
-speed*=0.4;combo=1;
-shakeX=5;shakeY=5;
-playBuf(sndCrash);
-}
-}
-}
-}
-}
-}
-
 function update(dt){
 if(state!=1)return;
 if(dt>0.1)dt=0.1;
@@ -335,10 +239,6 @@ turnRate+=(inputX*1.5-turnRate)*dt*4;
 playerX+=turnRate*dt*0.8;
 playerX+=curv*speed*dt*0.1;
 
-if(Math.abs(playerX)>0.9){
-playerX=Math.sign(playerX)*0.9;
-speed*=0.95;
-}
 
 dist+=speed*dt*0.5;
 score+=speed*dt*2;
@@ -352,8 +252,6 @@ ambientSnow();
 shakeX*=0.85;shakeY*=0.85;
 if(Math.abs(shakeX)<0.5)shakeX=0;
 if(Math.abs(shakeY)<0.5)shakeY=0;
-
-checkCollision();
 }
 
 function drawHUD(){
