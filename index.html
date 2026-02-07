@@ -19,7 +19,7 @@ let pX=0,pY=0,pZ=0;
 let camX=0,camY=3,camZ=-5;
 let camAngle=0;
 // Player screen position (updated by render, used by particles)
-let pScrX=0,pScrY=0,slopeVal=0,prevSpd=7.5,accelVal=0,smoothFov=0.65;
+let pScrX=0,pScrY=0,pScrSc=1,slopeVal=0,prevSpd=7.5,accelVal=0,smoothFov=0.65;
 
 function lerp(a,b,t){return a+(b-a)*t}
 
@@ -192,7 +192,7 @@ g.stroke();
 let pp=project(pX,pY,pZ);
 if(pp.z>0.3){
 pScrX=pp.x;pScrY=pp.y;
-let pSc=18/pp.z;
+let pSc=pScrSc=18/pp.z;
 let ph=pZ*4;
 // Dog lateral offset from steering
 let dogSteer=turnRate*0.5;
@@ -305,8 +305,8 @@ g.restore();
 function spraySnow(){
 for(let i=0;i<3;i++){
 particles.push({
-x:pScrX+(turnRate>0?-15:15),y:pScrY+10,
-vx:-turnRate*2+Math.random()*2-1,
+x:pScrX+(turnRate>0?10:-8)*pScrSc,y:pScrY+9*pScrSc,
+vx:turnRate*3+Math.random()*2-1,
 vy:-Math.random()*3-1,
 life:15+Math.random()*10|0,ml:25,
 sz:2+Math.random()*3
