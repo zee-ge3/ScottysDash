@@ -44,7 +44,7 @@
     let camX = 0, camY = 3, camZ = -5;
     let camAngle = 0;
     // Player screen position (updated by render, used by particles)
-    let pScrX = 0, pScrY = 0, pScrSc = 1, slopeVal = 0, lateralSlope = 0, prevSpd = 7.5, accelVal = 0, smoothFov = 0.65, dogTurn = 0;
+    let pScrX = 0, pScrY = 0, pScrSc = 1, slopeVal = 0, lateralSlope = 0, prevSpd = 14, accelVal = 0, smoothFov = 0.65, dogTurn = 0;
     // Terrain silhouette buffer - stores top-most rendered pixel and its depth per screen column
     let terrainSil = [], terrainSilD = [];
 
@@ -200,7 +200,7 @@
       if (state == 1 || state == 2) renderObstacles();
 
       // Speed streaks (from player)
-      if (speed >= 13 && state == 1) {
+      if (speed >= 20 && state == 1) {
         let spdF = 10 + (speed - 13) * 14 / 17;
         let n = spdF | 0;
         for (let i = 0; i < n; i++) {
@@ -378,8 +378,9 @@
     }
 
     function spawnObstacles() {
-      // Cell size in world units
-      let cellZ = 5, cellX = 6;
+      // Small cells = dense obstacles, shrinks further with progression
+      let cellZ = Math.max(1.8, 3 - pZ / 2000);
+      let cellX = Math.max(2.2, 3.5 - pZ / 2000);
       // Range around player to populate
       let rangeX = 60; // far left/right of player
       let rangeZbehind = 10, rangeZahead = 80;
@@ -402,24 +403,25 @@
           let r2 = seedRand(cx * 37, cz * 73);
           let r3 = seedRand(cz * 113, cx * 191);
 
-          // ~60% chance a cell has an obstacle (density increases over time)
-          let density = 0.55 + Math.min(0.25, pZ / 2000);
-          if (r1 > density) continue;
-
           // Position within cell
           let oz = cz * cellZ + r2 * cellZ;
           let ox = cx * cellX + r3 * cellX;
 
-          // Don't spawn right on top of player start
-          if (oz < 20 && Math.abs(ox) < 8) continue;
+          // Don't spawn near player at game start
+          if (oz < pZ + 30 && oz > pZ - 5 && Math.abs(ox - pX) < 10 && score < 100) continue;
 
-          // Leave a safe corridor near the player's current path
-          // (only for obstacles at roughly the same Z)
+          // Density: 50% (0-2000) → 70% (2000-4000) → 90% (4000+)
+          // Obstacles directly ahead always spawn to force weaving
+          let density = pZ < 2000 ? 0.275 : pZ < 4000 ? 0.275 + 0.075 * (pZ - 2000) / 2000 : 0.35 + 0.075 * Math.min(1, (pZ - 4000) / 2000);
           let dzToPlayer = oz - pZ;
-          if (dzToPlayer > 5 && dzToPlayer < 20 && Math.abs(ox - pX) < 3) continue;
+          let dxToPlayer = Math.abs(ox - pX);
+          let aheadCenter = dzToPlayer > 5 && dzToPlayer < 25 && dxToPlayer < 4;
+          if (!aheadCenter && r1 > density) continue;
 
           let type = r2 < 0.5 ? 0 : r2 < 0.8 ? 1 : 2;
-          obstacles.push({ x: ox, z: oz, type, hit: false });
+          let scale = 0.6 + seedRand(cz * 7, cx * 13) * 0.8;
+          let variant = seedRand(cz * 31, cx * 59);
+          obstacles.push({ x: ox, z: oz, type, hit: false, scale, variant, key });
         }
       }
     }
@@ -428,99 +430,87 @@
     let spawnedCells = new Set();
 
     function cleanupObstacles() {
-      let cellZ = 5, cellX = 6;
       for (let i = obstacles.length - 1; i >= 0; i--) {
         let ob = obstacles[i];
-        // Remove if far behind or far to the side
         if (ob.z < pZ - 25 || Math.abs(ob.x - pX) > 80) {
-          // Also remove the cell key so it can respawn if we come back (won't happen in practice)
-          let cz = Math.floor(ob.z / cellZ);
-          let cx = Math.floor(ob.x / cellX);
-          spawnedCells.delete(cz * 10000 + cx);
+          spawnedCells.delete(ob.key);
           obstacles.splice(i, 1);
         }
       }
     }
 
-    function drawTree(sx, sy, sc, type, fogT) {
-      // Fog blends colors toward sky
+    function drawTree(sx, sy, sc, type, fogT, vr) {
       let skyR = 192, skyG = 221, skyB = 240;
       function fogCol(r, gv, b) {
         return `rgb(${(r * (1 - fogT) + skyR * fogT) | 0},${(gv * (1 - fogT) + skyG * fogT) | 0},${(b * (1 - fogT) + skyB * fogT) | 0})`;
       }
       if (type === 0) {
-        // Pine tree - triangle layers
+        // Pine tree - 3 layers always, vary width (narrow/normal/bushy)
+        let wMul = vr < 0.33 ? 0.7 : vr < 0.66 ? 1 : 1.2;
         let h = sc * 16;
-        let w = sc * 7.2;
-        // Trunk
+        let w = sc * 7.2 * wMul;
         g.fillStyle = fogCol(70, 45, 20);
         g.fillRect(sx - sc * 0.2, sy - h * 0.15, sc * 0.4, h * 0.2);
-        // Tree layers (bottom to top)
         for (let i = 0; i < 3; i++) {
           let ly = sy - h * 0.15 - h * i * 0.22;
           let lw = w * (1 - i * 0.22);
-          // Dark green body
           g.fillStyle = fogCol(20 + i * 8, 70 + i * 10, 30 + i * 5);
-          g.beginPath();
-          g.moveTo(sx - lw, ly);
-          g.lineTo(sx, ly - h * 0.32);
-          g.lineTo(sx + lw, ly);
-          g.closePath();
-          g.fill();
+          g.beginPath(); g.moveTo(sx - lw, ly); g.lineTo(sx, ly - h * 0.32); g.lineTo(sx + lw, ly); g.closePath(); g.fill();
         }
-        // Snow on branches
         g.fillStyle = fogCol(230, 240, 245);
         for (let i = 0; i < 3; i++) {
           let ly = sy - h * 0.15 - h * i * 0.22;
           let lw = w * (1 - i * 0.22) * 0.65;
-          g.beginPath();
-          g.moveTo(sx - lw, ly - h * 0.04);
-          g.lineTo(sx, ly - h * 0.32);
-          g.lineTo(sx + lw, ly - h * 0.04);
-          g.closePath();
-          g.fill();
+          g.beginPath(); g.moveTo(sx - lw, ly - h * 0.04); g.lineTo(sx, ly - h * 0.32); g.lineTo(sx + lw, ly - h * 0.04); g.closePath(); g.fill();
         }
       } else if (type === 1) {
-        // Rock
         let sz = sc * 6.4;
-        g.fillStyle = fogCol(85, 90, 105);
-        g.beginPath();
-        g.moveTo(sx - sz, sy);
-        g.lineTo(sx - sz * 0.7, sy - sz * 1.1);
-        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
-        g.lineTo(sx + sz, sy - sz * 0.7);
-        g.lineTo(sx + sz * 0.8, sy);
-        g.closePath();
-        g.fill();
-        // Highlight
-        g.fillStyle = fogCol(120, 125, 140);
-        g.beginPath();
-        g.moveTo(sx - sz * 0.6, sy - sz * 0.6);
-        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
-        g.lineTo(sx + sz * 0.7, sy - sz * 0.8);
-        g.closePath();
-        g.fill();
-        // Snow cap
-        g.fillStyle = fogCol(210, 220, 230);
-        g.beginPath();
-        g.moveTo(sx - sz * 0.4, sy - sz * 0.95);
-        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
-        g.lineTo(sx + sz * 0.65, sy - sz * 0.8);
-        g.closePath();
-        g.fill();
+        let bg = sz * 0.35; // bury into ground
+        if (vr < 0.33) {
+          // Angular rock
+          g.fillStyle = fogCol(85, 90, 105);
+          g.beginPath(); g.moveTo(sx - sz, sy + bg); g.lineTo(sx - sz * 0.7, sy - sz * 1.1); g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
+          g.lineTo(sx + sz, sy - sz * 0.7); g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(120, 125, 140);
+          g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.6); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.7, sy - sz * 0.8); g.closePath(); g.fill();
+          g.fillStyle = fogCol(210, 220, 230);
+          g.beginPath(); g.moveTo(sx - sz * 0.4, sy - sz * 0.95); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.65, sy - sz * 0.8); g.closePath(); g.fill();
+        } else if (vr < 0.66) {
+          // Round boulder
+          g.fillStyle = fogCol(80, 85, 100);
+          g.beginPath(); g.moveTo(sx - sz * 0.9, sy + bg); g.lineTo(sx - sz, sy - sz * 0.5); g.lineTo(sx - sz * 0.6, sy - sz * 1.1);
+          g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.7, sy - sz * 1.0); g.lineTo(sx + sz * 0.9, sy - sz * 0.4);
+          g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(115, 120, 135);
+          g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.7); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.closePath(); g.fill();
+          g.fillStyle = fogCol(210, 220, 230);
+          g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.9); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.5, sy - sz * 0.85); g.closePath(); g.fill();
+        } else {
+          // Flat wide slab
+          g.fillStyle = fogCol(90, 95, 108);
+          g.beginPath(); g.moveTo(sx - sz * 1.2, sy + bg); g.lineTo(sx - sz * 1.0, sy - sz * 0.6); g.lineTo(sx - sz * 0.2, sy - sz * 0.8);
+          g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.lineTo(sx + sz * 1.1, sy - sz * 0.3); g.lineTo(sx + sz * 1.0, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(125, 130, 142);
+          g.beginPath(); g.moveTo(sx - sz * 0.5, sy - sz * 0.45); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.5, sy - sz * 0.55); g.closePath(); g.fill();
+          g.fillStyle = fogCol(215, 225, 235);
+          g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.5); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.4, sy - sz * 0.55); g.closePath(); g.fill();
+        }
       } else {
-        // Bare tree / dead tree
+        // Bare tree - vary branch count and lean
         let h = sc * 14;
+        let lean = (vr - 0.5) * sc * 2;
+        let nBranch = vr < 0.33 ? 3 : vr < 0.66 ? 4 : 5;
         g.strokeStyle = fogCol(60, 42, 25);
         g.lineWidth = Math.max(1.5, sc * 1);
-        // Trunk
-        g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx, sy - h); g.stroke();
-        // Branches
+        g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + lean, sy - h); g.stroke();
         g.lineWidth = Math.max(1, sc * 0.6);
-        g.beginPath(); g.moveTo(sx, sy - h * 0.45); g.lineTo(sx - sc * 5.2, sy - h * 0.65); g.stroke();
-        g.beginPath(); g.moveTo(sx, sy - h * 0.58); g.lineTo(sx + sc * 6, sy - h * 0.78); g.stroke();
-        g.beginPath(); g.moveTo(sx, sy - h * 0.72); g.lineTo(sx - sc * 3.2, sy - h * 0.92); g.stroke();
-        g.beginPath(); g.moveTo(sx, sy - h * 0.85); g.lineTo(sx + sc * 2.4, sy - h * 0.98); g.stroke();
+        for (let i = 0; i < nBranch; i++) {
+          let t = 0.35 + i * 0.55 / nBranch;
+          let dir = (i % 2 === 0) ? -1 : 1;
+          let bx = sx + lean * t + dir * sc * (3 + vr * 3);
+          let by2 = sy - h * (t + 0.15 + vr * 0.05);
+          g.beginPath(); g.moveTo(sx + lean * t, sy - h * t); g.lineTo(bx, by2); g.stroke();
+        }
       }
     }
 
@@ -559,13 +549,13 @@
         let baseY = p.y;
         if (p.y < terrainSil[col]) baseY = terrainSil[col];
 
-        visible.push({ ob, p, wy, crest, baseY });
+        visible.push({ ob, p, wy, crest, baseY, scale: ob.scale || 1, variant: ob.variant || 0 });
       }
       visible.sort((a, b) => b.p.z - a.p.z);
       for (let i = 0; i < visible.length; i++) {
-        let { ob, p, wy, crest, baseY } = visible[i];
-        let sc = 80 / p.z;
-        let fogT = Math.min(1, p.z * p.z * 0.0004);
+        let { ob, p, wy, crest, baseY, scale, variant } = visible[i];
+        let sc = 80 / p.z * scale;
+        let fogT = Math.min(1, p.z * p.z * 0.0006);
 
         g.save();
         if (crest) {
@@ -593,11 +583,9 @@
           g.clip();
         }
 
-        // Shadow on ground
-        g.fillStyle = `rgba(0,0,0,${0.15 * (1 - fogT)})`;
-        let shSz = sc * 0.8;
-        g.beginPath(); g.ellipse(p.x, baseY + shSz * 0.15, shSz * 1.2, shSz * 0.25, 0, 0, PI * 2); g.fill();
-        drawTree(p.x, baseY, sc, ob.type, fogT);
+        // Clip below ground so buried rock bases don't draw over terrain
+        g.beginPath(); g.rect(-20, 0, W + 40, baseY); g.clip();
+        drawTree(p.x, baseY, sc, ob.type, fogT, variant);
         g.restore();
       }
     }
@@ -605,14 +593,13 @@
     function checkCollisions() {
       // Only the rider triggers a crash - rider sits at pX, pZ
       // Rider body is narrow (~0.6 world units wide)
-      let hitRadiusX = 0.7;
-      let hitRadiusZ = 1.0;
       for (let i = 0; i < obstacles.length; i++) {
         let ob = obstacles[i];
         if (ob.hit) continue;
         let dz = ob.z - pZ;
         let dx = ob.x - pX;
-        if (Math.abs(dz) < hitRadiusZ && Math.abs(dx) < hitRadiusX) {
+        let s = ob.scale || 1;
+        if (Math.abs(dz) < 1.0 * s && Math.abs(dx) < 0.7 * s) {
           ob.hit = true;
           // CRASH!
           crashed = 1;
@@ -657,18 +644,25 @@
       let dragMult = inputTuck ? 0.6 : 1;
       let airDrag = speed * speed * 0.001 * dragMult;
 
+      // Progressive difficulty: speed floor/cap and steering scale with score
+      let prog = Math.min(1, score / 8000);
+      let rampUp = Math.min(1, pZ / 30);
+      let minSpd = rampUp * 14 + prog * 10;
+      let maxSpd = 35 + prog * 15;
+      let steerMul = 1 + prog * 0.6;
+
       speed += gravity * dt;
       speed -= (friction + turnDrag) * speed * dt;
       speed -= airDrag * dt;
       if (slopeVal > 0) speed -= slopeVal * slopeVal * 0.15 * dt;
-      speed = Math.max(7.5, Math.min(speed, 30));
+      speed = Math.max(minSpd, Math.min(speed, maxSpd));
       accelVal = lerp(accelVal, Math.max(0, (speed - prevSpd) / dt), Math.min(1, dt * 10));
       prevSpd = speed;
 
       // Steering
       let curv = curvature(pZ) * 0.002;
-      turnRate += (inputX * 2.5 - turnRate) * dt * .6;
-      pX += dogTurn * dt * 4.0;
+      turnRate += (inputX * 2.5 * steerMul - turnRate) * dt * .6;
+      pX += dogTurn * dt * 4.0 * steerMul;
       pX += curv * speed * dt * 0.1;
 
       // Move forward
@@ -781,10 +775,10 @@
       pX = 0; pZ = 0;
       for (let z = 0; z < 200; z++) { if (getHeight(0, z + 2) - getHeight(0, z - 2) < -0.3) { pZ = z; break; } }
       pY = getHeight(0, pZ);
-      speed = 7.5; turnRate = 0;
+      speed = 0; turnRate = 0;
       camX = 0; camY = pY + 2; camZ = pZ - 3; camAngle = 0;
       score = 0; combo = 1; maxCombo = 1; crashed = 0; crashTimer = 0;
-      particles = []; shakeX = 0; shakeY = 0; prevSpd = 7.5; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
+      particles = []; shakeX = 0; shakeY = 0; prevSpd = 14; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
       obstacles = []; lastSpawnZ = 0; spawnedCells = new Set();
     }
 
