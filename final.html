@@ -48,6 +48,34 @@
     // Terrain silhouette buffer - stores top-most rendered pixel and its depth per screen column
     let terrainSil = [], terrainSilD = [];
 
+    // Day cycle: 0=sunset, 0.25=night, 0.5=dawn, 0.75=day
+    let dayT = 0, dPh = {};
+    const dayPhases = [
+      { sky:[[45,30,60],[75,50,70],[150,85,55],[215,125,55],[242,160,48],[252,185,65]],
+        fog:[210,155,110], sunY:.35, sunA:.4, glow:.09,
+        sB:[110,90,80], sR:[140,120,100], sunStr:1, mtn:[90,70,70] },
+      { sky:[[8,5,25],[15,10,42],[25,15,58],[40,22,70],[50,28,80],[55,32,85]],
+        fog:[35,28,65], sunY:.55, sunA:.05, glow:0,
+        sB:[30,35,55], sR:[50,45,40], sunStr:0, mtn:[25,18,40] },
+      { sky:[[20,18,55],[50,35,85],[110,55,90],[190,105,110],[225,140,115],[245,165,125]],
+        fog:[180,130,140], sunY:.38, sunA:.3, glow:.07,
+        sB:[100,85,80], sR:[130,110,90], sunStr:.7, mtn:[70,45,75] },
+      { sky:[[58,127,183],[100,160,210],[140,195,230],[192,221,240],[210,230,240],[224,232,240]],
+        fog:[192,221,240], sunY:.12, sunA:.6, glow:0,
+        sB:[90,95,110], sR:[160,155,140], sunStr:.3, mtn:[100,110,130] }
+    ];
+    const dayB = [0, 0.3, 0.4, 0.7]; // phase starts: sunset 30%, night 10%, dawn 30%, day 30%
+    function updateDay() {
+      let t = dayT % 1, i = t < dayB[1] ? 0 : t < dayB[2] ? 1 : t < dayB[3] ? 2 : 3;
+      let j = (i + 1) % 4, f = (t - dayB[i]) / ((i < 3 ? dayB[i + 1] : 1) - dayB[i]);
+      let a = dayPhases[i], b = dayPhases[j];
+      let lv = (x, y) => x + (y - x) * f, la = (x, y) => x.map((v, k) => v + (y[k] - v) * f);
+      dPh = { sky: a.sky.map((c, k) => la(c, b.sky[k])), fog: la(a.fog, b.fog),
+        sunY: lv(a.sunY, b.sunY), sunA: lv(a.sunA, b.sunA), glow: lv(a.glow, b.glow),
+        sB: la(a.sB, b.sB), sR: la(a.sR, b.sR), sunStr: lv(a.sunStr, b.sunStr), mtn: la(a.mtn, b.mtn) };
+    }
+    updateDay();
+
     function lerp(a, b, t) { return a + (b - a) * t }
 
     // Project world coords to screen via camera rotation + perspective divide
@@ -80,7 +108,7 @@
       let horizon = H * 0.38;
       let focal = H * smoothFov;
       let colStep = W > 1200 ? 4 : 3;
-      let skyR = 192, skyG2 = 221, skyB = 240; // fog/sky color #c0ddf0
+      let skyR = dPh.fog[0], skyG2 = dPh.fog[1], skyB = dPh.fog[2];
 
       // Reset silhouette buffer (Y position and depth of topmost terrain pixel)
       terrainSil = new Array(W).fill(H);
@@ -106,15 +134,21 @@
           if (screenY < maxY) {
             // Snow color based on height relative to player
             let t = 1 - Math.max(0, Math.min(1, (h - pY + 8) / 16));
-            let baseR = 90 + t * 160;
-            let baseG = 95 + t * 155;
-            let baseB = 110 + t * 140;
+            let baseR = dPh.sB[0] + t * dPh.sR[0];
+            let baseG = dPh.sB[1] + t * dPh.sR[1];
+            let baseB = dPh.sB[2] + t * dPh.sR[2];
 
             // Slope shading via height offset sampling
             let hFwd = getHeight(wx + rayDx * 0.5, wz + rayDz * 0.5);
             let slopeDh = hFwd - h;
-            if (slopeDh > 0.03) { let sh = Math.min(0.45, slopeDh * 0.8); baseR += sh * 90; baseG += sh * 85; baseB += sh * 50; }
-            else if (slopeDh < -0.03) { let sh = Math.min(0.45, -slopeDh * 0.8); baseR -= sh * 70; baseG -= sh * 60; baseB += sh * 30; }
+            if (slopeDh > 0.03) { let sh = Math.min(0.45, slopeDh * 0.8); baseR += sh * 80; baseG += sh * 60; baseB += sh * 30; }
+            else if (slopeDh < -0.03) { let sh = Math.min(0.45, -slopeDh * 0.8); baseR -= sh * 50; baseG -= sh * 50; baseB -= sh * 20; }
+            // Directional sun lighting — sun from the right
+            let hLeft = getHeight(wx - 0.4, wz);
+            let hRight = getHeight(wx + 0.4, wz);
+            let crossSlope = (hRight - hLeft) * 1.5;
+            if (crossSlope > 0) { let sun = Math.min(0.5, crossSlope * 0.6) * dPh.sunStr; baseR += sun * 60; baseG += sun * 35; baseB -= sun * 10; }
+            else { let shd = Math.min(0.45, -crossSlope * 0.5) * dPh.sunStr; baseR -= shd * 40; baseG -= shd * 35; baseB += shd * 10; }
 
             // Distance fog blending
             let fogT = Math.min(1, dist * dist * 0.0004);
@@ -165,33 +199,57 @@
 
     // === 4. RENDERING: Project world from camera perspective ===
     function render() {
-      // Full-screen sky gradient
-      let skyG = g.createLinearGradient(0, 0, 0, H);
-      skyG.addColorStop(0, '#3a7fb7');
-      skyG.addColorStop(0.3, '#7ab8e0');
-      skyG.addColorStop(0.55, '#c0ddf0');
-      skyG.addColorStop(1, '#e0e8f0');
-      g.fillStyle = skyG;
+      // Full-screen sky gradient (dynamic day cycle)
+      let skyGr = g.createLinearGradient(0, 0, 0, H);
+      let skyStops = [0, 0.2, 0.4, 0.6, 0.8, 1];
+      for (let i = 0; i < 6; i++) { let c = dPh.sky[i]; skyGr.addColorStop(skyStops[i], `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`); }
+      g.fillStyle = skyGr;
       g.fillRect(0, 0, W, H);
 
-      // Sun
-      let sunX = W * 0.75, sunY = H * 0.12;
-      let sunG = g.createRadialGradient(sunX, sunY, 5, sunX, sunY, H * 0.13);
-      sunG.addColorStop(0, 'rgba(255,255,230,0.9)');
-      sunG.addColorStop(0.15, 'rgba(255,250,200,0.5)');
-      sunG.addColorStop(0.5, 'rgba(255,240,180,0.15)');
-      sunG.addColorStop(1, 'rgba(255,240,180,0)');
-      g.fillStyle = sunG;
-      g.beginPath(); g.arc(sunX, sunY, H * 0.13, 0, PI * 2); g.fill();
-      g.fillStyle = '#fffde8';
-      g.beginPath(); g.arc(sunX, sunY, 10, 0, PI * 2); g.fill();
+      // Stars (fade in at dusk, visible at night, fade out at dawn)
+      let starA = Math.max(0, Math.min(1, (0.3 - dPh.sunA) / 0.25));
+      if (starA > 0.01) {
+        for (let i = 0; i < 90; i++) {
+          let sx = ((i * 2654435761 + 7) >>> 0) % W;
+          let sy = ((i * 2246822519 + 13) >>> 0) % (H * 0.42);
+          let sz = 1 + (((i * 1013904223) >>> 0) % 3) * 0.5;
+          let twinkle = Math.sin(performance.now() * 0.001 + i * 2.3) * 0.3 + 0.7;
+          g.fillStyle = `rgba(255,255,240,${(starA * twinkle * 0.85).toFixed(2)})`;
+          g.fillRect(sx, sy, sz, sz);
+        }
+      }
 
-      // Mountain ranges with parallax (far to near, each fills to screen bottom)
+      // Sun / moon
+      let sunX = W * 0.78, sunYp = H * dPh.sunY;
+      if (dPh.sunA > 0.02) {
+        let sunH2 = g.createRadialGradient(sunX, sunYp, 0, sunX, sunYp, H * 0.35);
+        sunH2.addColorStop(0, `rgba(255,200,80,${dPh.sunA.toFixed(2)})`);
+        sunH2.addColorStop(0.3, `rgba(255,160,60,${(dPh.sunA * 0.375).toFixed(2)})`);
+        sunH2.addColorStop(0.7, `rgba(255,120,40,${(dPh.sunA * 0.125).toFixed(2)})`);
+        sunH2.addColorStop(1, 'rgba(255,100,30,0)');
+        g.fillStyle = sunH2;
+        g.beginPath(); g.arc(sunX, sunYp, H * 0.35, 0, PI * 2); g.fill();
+        let sIG = g.createRadialGradient(sunX, sunYp, 3, sunX, sunYp, H * 0.1);
+        sIG.addColorStop(0, `rgba(255,250,200,${Math.min(0.95, dPh.sunA * 2.4).toFixed(2)})`);
+        sIG.addColorStop(0.2, `rgba(255,220,140,${Math.min(0.7, dPh.sunA * 1.75).toFixed(2)})`);
+        sIG.addColorStop(0.6, `rgba(255,180,80,${Math.min(0.2, dPh.sunA * 0.5).toFixed(2)})`);
+        sIG.addColorStop(1, 'rgba(255,150,60,0)');
+        g.fillStyle = sIG;
+        g.beginPath(); g.arc(sunX, sunYp, H * 0.1, 0, PI * 2); g.fill();
+        g.fillStyle = `rgba(255,240,192,${Math.min(1, dPh.sunA * 2.5).toFixed(2)})`;
+        g.beginPath(); g.arc(sunX, sunYp, 11, 0, PI * 2); g.fill();
+      }
+
+      // Mountain ranges with parallax (derived from fog + base color)
       let px = -camAngle * W * 0.6, fz = camZ * 0.05;
-      drawMtn(H * 0.22, 100, 0.5, '#b0c0d4', -px * 0.15 + fz * 0.2, '#e8eef4', .2);
-      drawMtn(H * 0.30, 85, 1.7, '#9aabbd', -px * 0.35 + fz * 0.4, '#d0dce8', .35);
-      drawMtn(H * 0.38, 65, 3.1, '#8494a8', -px * 0.7 + fz * 1, '#c0cad6', .25);
-      drawMtn(H * 0.45, 50, 5.3, '#7080a0', -px * 1.2 + fz * 1.5);
+      let mc = (r, gv, b) => `rgb(${r|0},${gv|0},${b|0})`;
+      let mL = (d) => [dPh.mtn[0]*(1-d)+dPh.fog[0]*d, dPh.mtn[1]*(1-d)+dPh.fog[1]*d, dPh.mtn[2]*(1-d)+dPh.fog[2]*d];
+      let sL = (d) => { let m = mL(d); return [Math.min(255, m[0]+35), Math.min(255, m[1]+25), Math.min(255, m[2]+15)]; };
+      let m0=mL(.7),m1=mL(.6),m2=mL(.45),m3=mL(.3),s0=sL(.75),s1=sL(.65),s2=sL(.5);
+      drawMtn(H * 0.22, 100, 0.5, mc(...m0), -px * 0.15 + fz * 0.2, mc(...s0), .2);
+      drawMtn(H * 0.30, 85, 1.7, mc(...m1), -px * 0.35 + fz * 0.4, mc(...s1), .35);
+      drawMtn(H * 0.38, 65, 3.1, mc(...m2), -px * 0.7 + fz * 1, mc(...s2), .25);
+      drawMtn(H * 0.45, 50, 5.3, mc(...m3), -px * 1.2 + fz * 1.5);
 
       // 3D column raycaster terrain
       renderTerrain();
@@ -208,7 +266,7 @@
           let r1 = W * 0.25 + Math.random() * W * 0.15;
           let r2 = r1 + 40 + (accelVal + spdF) * 60;
           let dx = Math.cos(a), dy = Math.sin(a) * 0.6;
-          g.strokeStyle = `rgba(255,255,255,${Math.min(0.5, 0.3 + (spdF - 10) * 0.2 / 14)})`;
+          g.strokeStyle = `rgba(255,230,180,${Math.min(0.5, 0.3 + (spdF - 10) * 0.2 / 14)})`;
           g.lineWidth = 1 + Math.random() * 1.5;
           g.beginPath();
           g.moveTo(pScrX + dx * r1, pScrY + dy * r1);
@@ -257,9 +315,19 @@
       for (let i = particles.length - 1; i >= 0; i--) {
         let p = particles[i];
         p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--;
-        g.fillStyle = `rgba(255,255,255,${p.life / p.ml})`;
+        g.fillStyle = `rgba(255,230,190,${p.life / p.ml})`;
         g.fillRect(p.x, p.y, p.sz, p.sz);
         if (p.life <= 0) particles.splice(i, 1);
+      }
+
+      // Glow overlay (dynamic)
+      if (dPh.glow > 0.005) {
+        let glowG = g.createRadialGradient(W * 0.78, H * dPh.sunY, 0, W * 0.78, H * dPh.sunY, W * 0.6);
+        glowG.addColorStop(0, `rgba(255,160,40,${dPh.glow.toFixed(3)})`);
+        glowG.addColorStop(0.5, `rgba(255,120,20,${(dPh.glow * 0.5).toFixed(3)})`);
+        glowG.addColorStop(1, 'rgba(255,80,10,0)');
+        g.fillStyle = glowG;
+        g.fillRect(0, 0, W, H);
       }
     }
 
@@ -379,8 +447,8 @@
 
     function spawnObstacles() {
       // Small cells = dense obstacles, shrinks further with progression
-      let cellZ = Math.max(1.8, 3 - pZ / 2000);
-      let cellX = Math.max(2.2, 3.5 - pZ / 2000);
+      let cellZ = Math.max(3.6, 3 - pZ / 2000);
+      let cellX = Math.max(4.4, 3.5 - pZ / 2000);
       // Range around player to populate
       let rangeX = 60; // far left/right of player
       let rangeZbehind = 10, rangeZahead = 80;
@@ -440,7 +508,7 @@
     }
 
     function drawTree(sx, sy, sc, type, fogT, vr) {
-      let skyR = 192, skyG = 221, skyB = 240;
+      let skyR = dPh.fog[0], skyG = dPh.fog[1], skyB = dPh.fog[2];
       function fogCol(r, gv, b) {
         return `rgb(${(r * (1 - fogT) + skyR * fogT) | 0},${(gv * (1 - fogT) + skyG * fogT) | 0},${(b * (1 - fogT) + skyB * fogT) | 0})`;
       }
@@ -457,7 +525,7 @@
           g.fillStyle = fogCol(20 + i * 8, 70 + i * 10, 30 + i * 5);
           g.beginPath(); g.moveTo(sx - lw, ly); g.lineTo(sx, ly - h * 0.32); g.lineTo(sx + lw, ly); g.closePath(); g.fill();
         }
-        g.fillStyle = fogCol(230, 240, 245);
+        g.fillStyle = fogCol(240, 215, 190);
         for (let i = 0; i < 3; i++) {
           let ly = sy - h * 0.15 - h * i * 0.22;
           let lw = w * (1 - i * 0.22) * 0.65;
@@ -473,7 +541,7 @@
           g.lineTo(sx + sz, sy - sz * 0.7); g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
           g.fillStyle = fogCol(120, 125, 140);
           g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.6); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.7, sy - sz * 0.8); g.closePath(); g.fill();
-          g.fillStyle = fogCol(210, 220, 230);
+          g.fillStyle = fogCol(225, 195, 170);
           g.beginPath(); g.moveTo(sx - sz * 0.4, sy - sz * 0.95); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.65, sy - sz * 0.8); g.closePath(); g.fill();
         } else if (vr < 0.66) {
           // Round boulder
@@ -483,7 +551,7 @@
           g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
           g.fillStyle = fogCol(115, 120, 135);
           g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.7); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.closePath(); g.fill();
-          g.fillStyle = fogCol(210, 220, 230);
+          g.fillStyle = fogCol(225, 200, 175);
           g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.9); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.5, sy - sz * 0.85); g.closePath(); g.fill();
         } else {
           // Flat wide slab
@@ -492,7 +560,7 @@
           g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.lineTo(sx + sz * 1.1, sy - sz * 0.3); g.lineTo(sx + sz * 1.0, sy + bg); g.closePath(); g.fill();
           g.fillStyle = fogCol(125, 130, 142);
           g.beginPath(); g.moveTo(sx - sz * 0.5, sy - sz * 0.45); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.5, sy - sz * 0.55); g.closePath(); g.fill();
-          g.fillStyle = fogCol(215, 225, 235);
+          g.fillStyle = fogCol(225, 200, 175);
           g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.5); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.4, sy - sz * 0.55); g.closePath(); g.fill();
         }
       } else {
@@ -556,6 +624,19 @@
         let { ob, p, wy, crest, baseY, scale, variant } = visible[i];
         let sc = 80 / p.z * scale;
         let fogT = Math.min(1, p.z * p.z * 0.0006);
+
+        // Directional shadow (sun from right)
+        let shAlpha = 0.18 * (1 - fogT) * dPh.sunStr;
+        let shLen = sc * 3.5, shW = sc * 0.5;
+        if (ob.type === 0) shLen = sc * 4.5;
+        else if (ob.type === 2) shLen = sc * 4.0;
+        else if (ob.type === 1) { shLen = sc * 2.5; shW = sc * 0.7; }
+        g.save();
+        g.translate(p.x, baseY);
+        g.transform(1, 0, -0.6, 0.18, 0, 0);
+        g.fillStyle = `rgba(40,25,30,${shAlpha.toFixed(2)})`;
+        g.fillRect(-shLen, -shW * 0.5, shLen, shW);
+        g.restore();
 
         g.save();
         if (crest) {
@@ -632,6 +713,7 @@
     function update(dt) {
       if (state != 1) return;
       if (dt > 0.1) dt = 0.1;
+      dayT = (dayT + speed * dt * 0.5 * 0.0032) % 1;
 
       // === 2. PLAYER POSITIONING: Snap to ground ===
       // Slope: negative=downhill (fast), positive=uphill (slow)
@@ -663,7 +745,7 @@
 
       // Steering
       let curv = curvature(pZ) * 0.002;
-      turnRate += (inputX * 2.5 * steerMul - turnRate) * dt * .6;
+      turnRate += (inputX * 2.5 * steerMul - turnRate) * dt * 1.2;
       pX += dogTurn * dt * 4.0 * steerMul;
       pX += curv * speed * dt * 0.1;
 
@@ -764,7 +846,7 @@
         g.fillText('Best: ' + hiScore, W / 2, H * 0.72);
       }
 
-      g.fillStyle = 'rgba(255,255,255,0.5)';
+      g.fillStyle = 'rgba(255,230,190,0.5)';
       g.font = Math.max(11, W * 0.03 | 0) + 'px monospace';
       g.fillText('Touch sides to steer', W / 2, H * 0.82);
       g.fillText('Arrow keys / mouse on desktop', W / 2, H * 0.87);
@@ -801,7 +883,7 @@
       camX = 0; camY = pY + 2; camZ = pZ - 3; camAngle = 0;
       score = 0; combo = 1; maxCombo = 1; crashed = 0; crashTimer = 0;
       particles = []; shakeX = 0; shakeY = 0; prevSpd = 14; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
-      obstacles = []; lastSpawnZ = 0; spawnedCells = new Set();
+      obstacles = []; lastSpawnZ = 0; spawnedCells = new Set(); dayT = 0;
     }
 
     let keys = {};
@@ -826,7 +908,7 @@
     let ax, aInited = 0, aM, noiseBuf;
     let aWindG, aWindF, wg2, aPadG, padF, padOscs = [], aRunG, aRunF, aCarvG, aCarvF, aCarvF2, aChimeG;
     let chordIdx = 0, chordTimer = 7, chimeTimer = 3, arpStep = 0, arpTimer = 1;
-    let carveBurst = 0, prevTurnAbs = 0, carveVol = 0;
+    let carveBurst = 0, prevTurnAbs = 0, carveVol = 0, smoothTempo = 1;
     let chords = [[65.4,130.8,164.8,196],[55,130.8,164.8,196],[43.7,130.8,164.8,174.6],[49,123.5,146.8,196]];
     let chimeScales = [[523.3,659.3,784,1046.5,1318.5],[523.3,659.3,784,880,1046.5],[523.3,587.3,698.5,880,1046.5],[587.3,784,988,1174.7,1568]];
 
@@ -906,14 +988,15 @@
       let n = 2 + ((Math.random() * 2) | 0);
       let base = (Math.random() * (sc.length - n)) | 0;
       let t = ax.currentTime;
+      let gap = 0.18 * smoothTempo;
       for (let i = 0; i < n; i++) {
         let f = sc[base + i];
-        let gt = ax.createGain(); gt.gain.setValueAtTime(0, t + i * 0.18);
-        gt.gain.linearRampToValueAtTime(0.12, t + i * 0.18 + 0.03);
-        gt.gain.setTargetAtTime(0, t + i * 0.18 + 0.05, 0.5 + Math.random() * 0.4); gt.connect(aChimeG);
-        let o = ax.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(gt); o.start(t + i * 0.18); o.stop(t + i * 0.18 + 4);
+        let gt = ax.createGain(); gt.gain.setValueAtTime(0, t + i * gap);
+        gt.gain.linearRampToValueAtTime(0.12, t + i * gap + 0.03);
+        gt.gain.setTargetAtTime(0, t + i * gap + 0.05, 0.5 + Math.random() * 0.4); gt.connect(aChimeG);
+        let o = ax.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(gt); o.start(t + i * gap); o.stop(t + i * gap + 4);
         let g2 = ax.createGain(); g2.gain.value = 0.25; g2.connect(gt);
-        let o2 = ax.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.003; o2.connect(g2); o2.start(t + i * 0.18); o2.stop(t + i * 0.18 + 4);
+        let o2 = ax.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.003; o2.connect(g2); o2.start(t + i * gap); o2.stop(t + i * gap + 4);
       }
     }
 
@@ -941,6 +1024,9 @@
 
     function updateAudio(dt) {
       let spd = Math.max(0, Math.min(1, (speed - 14) / 36));
+      // Tempo: slopeVal<0 = downhill = faster, >0 = uphill = slower
+      let targetTempo = Math.max(0.35, Math.min(1.5, 1 + slopeVal * 0.35));
+      smoothTempo = lerp(smoothTempo, targetTempo, Math.min(1, dt * 2));
       // Wind
       aWindG.gain.value = 0.04 + spd * 0.06;
       aWindF.frequency.value = 250 + spd * 600;
@@ -958,22 +1044,22 @@
       aCarvF.frequency.value = 400 + ta * 350 + carveBurst * 200;
       aCarvF.Q.value = 0.5 + carveBurst * 1.0;
       prevTurnAbs = ta;
-      // Chord progression
-      chordTimer -= dt;
+      // Chord progression (tempo-scaled)
+      chordTimer -= dt / smoothTempo;
       if (chordTimer <= 0) {
         chordIdx = (chordIdx + 1) % 4;
         let t = ax.currentTime;
         for (let i = 0; i < 4; i++) padOscs[i].frequency.setTargetAtTime(chords[chordIdx][i], t, 1.5);
         chordTimer = 6 + Math.random() * 3;
       }
-      // Chimes
+      // Chimes (tempo-scaled)
       if (state == 1) {
-        chimeTimer -= dt;
+        chimeTimer -= dt / smoothTempo;
         if (chimeTimer <= 0) {
           if (Math.random() < 0.3) { playArpPhrase(); chimeTimer = 4 + Math.random() * 5; }
           else { playChime(); chimeTimer = 2 + Math.random() * 4; }
         }
-        arpTimer -= dt;
+        arpTimer -= dt / smoothTempo;
         if (arpTimer <= 0) { playBgArp(); arpTimer = 0.8 + Math.random() * 0.4; }
       }
       // Master fade on crash
@@ -1009,6 +1095,7 @@
       if (state == 2) { crashTimer -= dt; shakeX *= 0.9; shakeY *= 0.9 }
 
       if (aInited) updateAudio(dt);
+      updateDay();
       render();
       drawHUD();
       if (state == 0) drawTitle();
