@@ -279,7 +279,7 @@ g.restore();
 // Bobsled + rider
 function drawSled(x,y,sc){
 let lean=turnRate*0.3;
-g.save();g.translate(x,y);g.scale(sc,sc);g.rotate(lean*0.15);
+g.save();g.translate(x,y);g.scale(sc,sc);g.rotate(lean*0.15-lateralSlope*0.8);
 // Shadow
 g.fillStyle='rgba(0,0,0,0.15)';
 g.beginPath();g.ellipse(0,11,13,3,0,0,PI*2);g.fill();
