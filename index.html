@@ -93,6 +93,18 @@ skyG.addColorStop(1,'#e0e8f0');
 g.fillStyle=skyG;
 g.fillRect(0,0,W,H);
 
+// Sun
+let sunX=W*0.75,sunY=H*0.12;
+let sunG=g.createRadialGradient(sunX,sunY,5,sunX,sunY,H*0.13);
+sunG.addColorStop(0,'rgba(255,255,230,0.9)');
+sunG.addColorStop(0.15,'rgba(255,250,200,0.5)');
+sunG.addColorStop(0.5,'rgba(255,240,180,0.15)');
+sunG.addColorStop(1,'rgba(255,240,180,0)');
+g.fillStyle=sunG;
+g.beginPath();g.arc(sunX,sunY,H*0.13,0,PI*2);g.fill();
+g.fillStyle='#fffde8';
+g.beginPath();g.arc(sunX,sunY,10,0,PI*2);g.fill();
+
 // Mountain ranges with parallax (far to near, each fills to screen bottom)
 let px=-camX,fz=camZ*0.05,tr=turnRate*W*0.012;
 drawMtn(H*0.22,100,0.5,'#b0c0d4',px*0.15+fz*0.1+tr*0.15);
@@ -127,7 +139,7 @@ let sy=horizon-relY*focal/dz+shakeY;
 let sx=W/2+accCurve*W*0.15/dz+shakeX;
 let tw=Math.max(W,W*2.5/dz);
 
-segs.push({si:si,sx:sx,sy:sy,tw:tw,dz:dz});
+segs.push({si:si,sx:sx,sy:sy,tw:tw,dz:dz,gh:groundH});
 }
 
 // Render strips far to near (painter's algorithm)
@@ -144,6 +156,14 @@ else if(tt==2)col=ch?'#c0d4e8':'#aec4d8';
 else col=ch?'#d0d8e0':'#c0c8d0';
 
 D(f.sx,f.sy,f.tw,nr.sx,nr.sy+1,nr.tw,col);
+
+// Slope shading: sun-facing=warm, shadow=cool
+let dh=nr.gh-f.gh;
+if(Math.abs(dh)>0.08){
+g.globalAlpha=Math.min(0.2,Math.abs(dh)*0.4);
+D(f.sx,f.sy,f.tw,nr.sx,nr.sy+1,nr.tw,dh>0?'#ffe':'#336');
+g.globalAlpha=1;
+}
 }
 
 // Speed streaks (radial from vanishing point)
