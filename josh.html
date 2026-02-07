@@ -67,6 +67,7 @@ let rayDx=Math.sin(rayAng);
 let rayDz=Math.cos(rayAng);
 let maxY=H;
 let dist=1.0;
+let silDist=999;
 let perpCos=Math.cos(Math.atan(screenX));
 
 for(let step=0;step<130;step++){
@@ -98,6 +99,7 @@ let b=baseB*(1-fogT)+skyB*fogT;
 g.fillStyle=`rgb(${r|0},${gv|0},${b|0})`;
 g.fillRect(col,screenY|0,colStep,maxY-screenY+1);
 maxY=screenY;
+silDist=dist;
 }
 
 if(maxY<=0)break;
@@ -109,7 +111,7 @@ if(dist>50)break;
 let silY=maxY|0;
 for(let cc=col;cc<col+colStep&&cc<W;cc++){
 terrainSil[cc]=silY;
-terrainSilD[cc]=dist;
+terrainSilD[cc]=silDist;
 }
 }
 }
@@ -480,53 +482,52 @@ function drawTree(sx,sy,sc,type,fogT){
 }
 
 function renderObstacles(){
-  // Sort back-to-front
   let visible=[];
   for(let i=0;i<obstacles.length;i++){
     let ob=obstacles[i];
     let wy=getHeight(ob.x,ob.z);
     let p=project(ob.x,wy,ob.z);
     if(p.z>0.5&&p.z<45&&p.x>-200&&p.x<W+200){
-      // Ray occlusion: world-space line-of-sight check
-      // Sample terrain between camera and obstacle; if any point is above
-      // the camera-to-obstacle sight line, the obstacle is behind a hill
-      let occluded=false;
-      let steps=8;
+      // Ray occlusion: cast from camera to obstacle in world space
+      // Check if any terrain along the way rises above the line of sight
+      let maxExcess=0;
+      let bestBx=0,bestBz=0,bestBh=0;
+      let steps=10;
       for(let s=1;s<steps;s++){
         let t=s/steps;
         let sx=camX+(ob.x-camX)*t;
         let sz=camZ+(ob.z-camZ)*t;
-        // Height of the line-of-sight at this sample point
         let losY=camY+(wy-camY)*t;
         let terrainH=getHeight(sx,sz);
-        // If terrain is above the sight line, obstacle is occluded
-        if(terrainH>losY+0.3){occluded=true;break;}
+        let excess=terrainH-losY;
+        if(excess>maxExcess){
+          maxExcess=excess;
+          bestBx=sx;bestBz=sz;bestBh=terrainH;
+        }
       }
-      if(!occluded)visible.push({ob,p,wy});
+      if(maxExcess>0.3){
+        // Occluded — project the blocking terrain to get a clip line
+        let bp=project(bestBx,bestBh,bestBz);
+        visible.push({ob,p,wy,clipY:bp.y});
+      }else{
+        // No occlusion — fully visible, no clip
+        visible.push({ob,p,wy,clipY:-1});
+      }
     }
   }
   visible.sort((a,b)=>b.p.z-a.p.z);
   for(let i=0;i<visible.length;i++){
-    let {ob,p,wy}=visible[i];
+    let {ob,p,wy,clipY}=visible[i];
     let sc=80/p.z;
     let fogT=Math.min(1,p.z*p.z*0.0004);
 
-    // Depth-aware silhouette clip: only clip where terrain is CLOSER than obstacle
-    let ext=sc*9; // wide enough for 4x enlarged trees/branches
-    let clipLeft=Math.max(0,Math.floor(p.x-ext));
-    let clipRight=Math.min(W-1,Math.ceil(p.x+ext));
     g.save();
-    g.beginPath();
-    for(let col=clipLeft;col<=clipRight;col+=2){
-      let cc=Math.min(col,W-1);
-      // Only clip at this column if the terrain silhouette is from CLOSER terrain
-      let sy=(terrainSilD[cc]<p.z-0.5)?terrainSil[cc]:0;
-      g.lineTo(col,sy);
+    if(clipY>=0){
+      // Crest clip: only show the part of the obstacle above the blocking terrain
+      g.beginPath();
+      g.rect(0,0,W,clipY);
+      g.clip();
     }
-    g.lineTo(clipRight,H);
-    g.lineTo(clipLeft,H);
-    g.closePath();
-    g.clip();
 
     // Shadow on ground
     g.fillStyle=`rgba(0,0,0,${0.15*(1-fogT)})`;
