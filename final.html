@@ -4,7 +4,7 @@
 <head>
   <meta charset=utf-8>
   <meta name=viewport content="width=device-width,initial-scale=1,user-scalable=no">
-  <title>Stranded at Seven Springs</title>
+  <title>Scotty's Dash</title>
   <style>
     * {
       margin: 0;
@@ -723,56 +723,20 @@
         g.fillStyle = '#ff0';
         g.fillText('Combo x' + combo + '!', 10, fs * 3 + 15);
       }
-      // 2D elevation minimap (top-right)
-      let mapSz = Math.max(80, W * 0.12 | 0);
-      let mapX = W - mapSz - 10, mapY = 10;
-      let mapRes = 2; // pixel step
-      let mapRange = 40; // world units around player
-      g.fillStyle = 'rgba(0,0,0,0.4)';
-      g.fillRect(mapX - 2, mapY - 2, mapSz + 4, mapSz + 4);
-      for (let py2 = 0; py2 < mapSz; py2 += mapRes) {
-        for (let px2 = 0; px2 < mapSz; px2 += mapRes) {
-          let wx = pX + (px2 - mapSz / 2) / mapSz * mapRange;
-          let wz = pZ + (mapSz / 2 - py2) / mapSz * mapRange;
-          let h = getHeight(wx, wz);
-          let rel = (h - pY + 10) / 20;
-          rel = Math.max(0, Math.min(1, rel));
-          // Low=green(downhill), mid=white(snow), high=brown(uphill)
-          let r, gv, b;
-          if (rel < 0.5) { let t = rel * 2; r = 70 + t * 185; gv = 160 + t * 95; b = 70 + t * 185; }
-          else { let t = (rel - 0.5) * 2; r = 255 - t * 115; gv = 255 - t * 135; b = 255 - t * 175; }
-          g.fillStyle = `rgb(${r | 0},${gv | 0},${b | 0})`;
-          g.fillRect(mapX + px2, mapY + py2, mapRes, mapRes);
-        }
-      }
-      // Player dot
-      g.fillStyle = '#f00';
-      g.beginPath(); g.arc(mapX + mapSz / 2, mapY + mapSz / 2, 3, 0, PI * 2); g.fill();
-      // Direction indicator
-      g.strokeStyle = '#f00'; g.lineWidth = 2;
-      g.beginPath();
-      g.moveTo(mapX + mapSz / 2, mapY + mapSz / 2);
-      g.lineTo(mapX + mapSz / 2 + Math.sin(camAngle) * 8, mapY + mapSz / 2 - Math.cos(camAngle) * 8);
-      g.stroke();
-      // Elevation label
-      g.textAlign = 'right';
-      g.fillStyle = '#ccc';
-      g.font = Math.max(11, W * 0.03 | 0) + 'px monospace';
-      g.fillText((2000 + Math.floor(pY * 10)) + 'm', W - 10, mapY + mapSz + 16);
     }
 
     function drawTitle() {
       g.textAlign = 'center';
       g.fillStyle = '#fff';
       g.font = 'bold ' + Math.max(36, W * 0.1 | 0) + 'px monospace';
-      g.fillText('STRANDED', W / 2, H * 0.28);
-      g.fillText('at Seven Springs', W / 2, H * 0.38);
+      g.fillText('Scotty\'s', W / 2, H * 0.28);
+      g.fillText('Dash', W / 2, H * 0.38);
 
       g.font = Math.max(14, W * 0.04 | 0) + 'px monospace';
       g.fillStyle = 'rgba(255,255,255,0.7)';
       g.fillText('Don\'t be late for class!', W / 2, H * 0.48);
 
-      if (Date.now() % 1000 < 600) {
+      if (Date.now() % 1000 < 600) { 
         g.fillStyle = '#fff';
         g.font = 'bold ' + Math.max(18, W * 0.05 | 0) + 'px monospace';
         g.fillText('TAP TO START', W / 2, H * 0.62);
@@ -786,7 +750,7 @@
 
       g.fillStyle = 'rgba(255,255,255,0.5)';
       g.font = Math.max(11, W * 0.03 | 0) + 'px monospace';
-      g.fillText('Touch sides to steer | Bottom = tuck', W / 2, H * 0.82);
+      g.fillText('Touch sides to steer', W / 2, H * 0.82);
       g.fillText('Arrow keys / mouse on desktop', W / 2, H * 0.87);
     }
 
