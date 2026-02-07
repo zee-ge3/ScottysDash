@@ -35,6 +35,8 @@
     let score = 0, combo = 1, maxCombo = 1, hiScore = +localStorage.getItem('hs') || 0;
     let inputX = 0, inputTuck = 0, crashed = 0, crashTimer = 0;
     let particles = [], shakeX = 0, shakeY = 0;
+    // Trail history: arrays of {lx,lz,rx,rz} for left/right runner positions
+    let trailHist = [], trailMaxLen = 120;
     // Obstacles: {x,z,type} type: 0=pine tree, 1=rock, 2=bare tree
     let obstacles = [], lastSpawnZ = 0;
     let lastTime = 0;
@@ -276,6 +278,66 @@
       }
 
 
+      // === SNOW TRACKS under sled runners (from recorded history) ===
+      if (trailHist.length > 2) {
+        let trackW = 0.025;
+        let segSize = 4; // points per segment for gradient chunks
+        let totalSegs = Math.ceil(trailHist.length / segSize);
+        for (let r = 0; r < 2; r++) {
+          for (let seg = 0; seg < totalSegs; seg++) {
+            let i0 = seg * segSize;
+            let i1 = Math.min(i0 + segSize, trailHist.length - 1);
+            if (i0 >= trailHist.length - 1) break;
+            // Fade: front segments (low index) are more transparent
+            let fadeT = i0 / trailHist.length;
+            let alpha = 0.3 * Math.max(0.3, Math.min(1, fadeT * 4)); // ramps but never below 0.09
+            g.beginPath();
+            let started = false;
+            // Left edge forward
+            for (let i = i0; i <= i1; i++) {
+              let h = trailHist[i];
+              let tx = r === 0 ? h.lx : h.rx;
+              let tz = r === 0 ? h.lz : h.rz;
+              let ty = getHeight(tx, tz);
+              let tp = project(tx - trackW, ty, tz);
+              if (tp.z < 0.5 || tp.z > 45) continue;
+              if (!started) { g.moveTo(tp.x, tp.y); started = true; }
+              else g.lineTo(tp.x, tp.y);
+            }
+            // Right edge backward
+            for (let i = i1; i >= i0; i--) {
+              let h = trailHist[i];
+              let tx = r === 0 ? h.lx : h.rx;
+              let tz = r === 0 ? h.lz : h.rz;
+              let ty = getHeight(tx, tz);
+              let tp = project(tx + trackW, ty, tz);
+              if (tp.z < 0.5 || tp.z > 45) continue;
+              g.lineTo(tp.x, tp.y);
+            }
+            g.closePath();
+            g.fillStyle = `rgba(30,35,50,${alpha.toFixed(3)})`;
+            g.fill();
+          }
+          // Rounded cap at trail front
+          if (trailHist.length > 0) {
+            let h0 = trailHist[0];
+            let tx = r === 0 ? h0.lx : h0.rx;
+            let tz = r === 0 ? h0.lz : h0.rz;
+            let ty = getHeight(tx, tz);
+            let tp = project(tx, ty, tz);
+            if (tp.z > 0.5 && tp.z < 45) {
+              let rad = trackW * tp.s * 0.8;
+              if (rad > 0.5) {
+                g.beginPath();
+                g.arc(tp.x, tp.y, rad, 0, PI * 2);
+                g.fillStyle = 'rgba(30,35,50,0.05)';
+                g.fill();
+              }
+            }
+          }
+        }
+      }
+
       // === 5. RENDER BOBSLED TEAM ===
       let pp = project(pX, pY, pZ);
       if (pp.z > 0.3) {
@@ -301,6 +363,28 @@
         drawDog(ldRx, lp.y - lsOff, lS, ph + PI * .5);
         drawDog(wdLx, wp.y + lsOff, wS, ph + PI);
         drawDog(wdRx, wp.y - lsOff, wS, ph + PI * 1.5);
+        // Dog foot snow puffs
+        if (state == 1 && speed > 5) {
+          let dogs = [
+            { x: ldLx, y: lp.y + lsOff, s: lS, p: ph },
+            { x: ldRx, y: lp.y - lsOff, s: lS, p: ph + PI * .5 },
+            { x: wdLx, y: wp.y + lsOff, s: wS, p: ph + PI },
+            { x: wdRx, y: wp.y - lsOff, s: wS, p: ph + PI * 1.5 }
+          ];
+          for (let d of dogs) {
+            // Spawn on leg strike (when sin crosses zero going down)
+            if (Math.sin(d.p) > 0.5 && Math.random() < 0.6) {
+              particles.push({
+                x: d.x + (Math.random() * 4 - 2) * d.s,
+                y: d.y + 2 * d.s,
+                vx: (Math.random() - 0.5) * 2,
+                vy: -Math.random() * 1.8 - 0.5,
+                life: 14 + Math.random() * 10 | 0, ml: 24,
+                sz: 2 + Math.random() * 2.5
+              });
+            }
+          }
+        }
         // Harness: lead dogs to wheel dogs
         g.strokeStyle = '#654'; g.lineWidth = 1;
         g.beginPath(); g.moveTo(ldLx, lp.y - 5 * lS); g.lineTo(wdLx, wp.y - 5 * wS); g.stroke();
@@ -375,13 +459,16 @@
     // Sled + rider (rear view)
     function drawSled(x, y, sc) {
       let lean = turnRate * 0.3;
-      g.save(); g.translate(x, y); g.scale(sc, sc); g.rotate(lean * 0.15 - lateralSlope * 0.8);
+      let slideX = lean * 6; // lateral slide when turning
+      g.save(); g.translate(x + slideX * sc, y); g.scale(sc, sc); g.rotate(lean * 0.4 - lateralSlope * 0.8);
       // Shadow
       g.fillStyle = 'rgba(0,0,0,0.15)';
       g.beginPath(); g.ellipse(0, 12, 10, 3, 0, 0, PI * 2); g.fill();
+      // Runner height offset — inner runner dips, outer lifts when turning
+      let rLift = lean * 3;
       // Runners (two vertical lines, splayed)
       g.fillStyle = '#654321';
-      g.fillRect(-8, 4, 2, 7); g.fillRect(6, 4, 2, 7);
+      g.fillRect(-8, 4 + rLift, 2, 7 - rLift); g.fillRect(6, 4 - rLift, 2, 7 + rLift);
       // Runner blades
       g.fillStyle = '#888';
       g.fillRect(-9, 10, 3, 1); g.fillRect(6, 10, 3, 1);
@@ -395,18 +482,19 @@
       g.fillStyle = '#654321';
       g.fillRect(-7, 1, 1, 4); g.fillRect(6, 1, 1, 4);
       g.fillRect(-7, 1, 14, 1);
-      // Rider torso (back view)
-      g.fillStyle = '#445'; g.fillRect(-4, -4, 8, 6);
+      // Rider torso (back view) — leans into turn
+      let riderLean = lean * 4;
+      g.fillStyle = '#445'; g.fillRect(-4 + riderLean, -4, 8, 6);
       // Shoulders
-      g.fillRect(-5, -3, 1, 2); g.fillRect(4, -3, 1, 2);
-      // Arms gripping handlebar
+      g.fillRect(-5 + riderLean, -3, 1, 2); g.fillRect(4 + riderLean, -3, 1, 2);
+      // Arms gripping handlebar — inner arm extends, outer arm tucks
       g.fillRect(-6, -1, 2, 3); g.fillRect(4, -1, 2, 3);
-      // Head (back of)
-      g.fillStyle = '#dba'; g.fillRect(-2, -7, 4, 3);
+      // Head (back of) — follows rider lean
+      g.fillStyle = '#dba'; g.fillRect(-2 + riderLean, -7, 4, 3);
       // Beanie
-      g.fillStyle = '#bb0000'; g.fillRect(-3, -9, 6, 2);
+      g.fillStyle = '#bb0000'; g.fillRect(-3 + riderLean, -9, 6, 2);
       // Pom pom
-      g.fillStyle = '#fff'; g.fillRect(-1, -10, 2, 1);
+      g.fillStyle = '#fff'; g.fillRect(-1 + riderLean, -10, 2, 1);
       // Scarf trailing
       g.fillStyle = '#c49102'; g.fillRect(-3, -4, 6, 1);
       g.restore();
@@ -424,15 +512,56 @@
       }
     }
 
-    function ambientSnow() {
-      if (Math.random() < 0.3 + speed * 0.05) {
+    function runnerSpray() {
+      // Snow spray from each sled runner blade, rotated with sled tilt
+      let ang = turnRate * 0.3 * 0.15 - lateralSlope * 0.8;
+      let cs = Math.cos(ang), sn = Math.sin(ang);
+      // Left runner blade local pos (-8, 11), right (7, 11)
+      let llx = -8 * cs - 11 * sn, lly = -8 * sn + 11 * cs;
+      let rlx = 7 * cs - 11 * sn, rly = 7 * sn + 11 * cs;
+      let lx = pScrX + llx * pScrSc, rx = pScrX + rlx * pScrSc;
+      let lby = pScrY + lly * pScrSc, rby = pScrY + rly * pScrSc;
+      let n = 1 + (speed / 15 | 0);
+      for (let i = 0; i < n; i++) {
+        // Left runner
         particles.push({
-          x: Math.random() * W, y: -5,
-          vx: turnRate * 0.5 + Math.random() - 0.5,
-          vy: 1 + Math.random() * 2 + speed * 0.3,
-          life: 60 + Math.random() * 40 | 0, ml: 100,
-          sz: 1 + Math.random() * 2
+          x: lx + Math.random() * 3 - 1, y: lby + Math.random() * 2,
+          vx: -0.8 - Math.random() * 1 + turnRate * 0.3,
+          vy: -Math.random() * 1.5 - 0.3,
+          life: 10 + Math.random() * 8 | 0, ml: 18,
+          sz: 1.5 + Math.random() * 2.5
         });
+        // Right runner
+        particles.push({
+          x: rx + Math.random() * 3 - 1, y: rby + Math.random() * 2,
+          vx: 0.8 + Math.random() * 1 + turnRate * 0.3,
+          vy: -Math.random() * 1.5 - 0.3,
+          life: 10 + Math.random() * 8 | 0, ml: 18,
+          sz: 1.5 + Math.random() * 2.5
+        });
+      }
+    }
+
+    function ambientSnow() {
+      let n = 2 + (speed * 0.25 | 0);
+      for (let i = 0; i < n; i++) {
+        if (Math.random() < 0.6) {
+          // Spawn anywhere on screen, move outward from center like flying into snow
+          let sx = Math.random() * W;
+          let sy = Math.random() * H * 0.7;
+          let dx = sx - W * 0.5, dy = sy - H * 0.38;
+          let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          let spd = 0.4 + Math.random() * 1 + speed * 0.2;
+          let vyBase = (dy / dist) * spd;
+          if (vyBase < 0.2) vyBase = 0.2;
+          particles.push({
+            x: sx, y: sy,
+            vx: (dx / dist) * spd + turnRate * 0.3,
+            vy: vyBase + 0.3,
+            life: 60 + Math.random() * 40 | 0, ml: 100,
+            sz: 1 + Math.random() * 1.5, grow: 1
+          });
+        }
       }
     }
 
@@ -755,6 +884,12 @@
       // Snap player Y to ground height
       pY = getHeight(pX, pZ);
 
+      // Record trail positions (left and right runner)
+      let rOff = 0.2;
+      let trailZOff = 0.42 * Math.min(1, Math.max(0.35, -slopeVal * 0.5));
+      trailHist.unshift({ lx: pX - rOff, lz: pZ - trailZOff, rx: pX + rOff, rz: pZ - trailZOff });
+      if (trailHist.length > trailMaxLen) trailHist.length = trailMaxLen;
+
       // Score
       score += speed * dt * 2;
 
@@ -774,6 +909,7 @@
         spraySnow();
       }
       ambientSnow();
+      if (speed > 5) runnerSpray();
 
       // Smooth dog turn (lags behind turnRate for natural feel)
       dogTurn = lerp(dogTurn, turnRate, Math.min(1, dt * 2));
