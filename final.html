@@ -347,7 +347,7 @@
     function spraySnow() {
       for (let i = 0; i < 3; i++) {
         particles.push({
-          x: pScrX + (turnRate > 0 ? 10 : -8) * pScrSc, y: pScrY + 9 * pScrSc,
+          x: 5 + pScrX + (turnRate > 0 ? 7 : -9) * pScrSc, y: pScrY + 10 * pScrSc,
           vx: turnRate * 3 + Math.random() * 2 - 1,
           vy: -Math.random() * 3 - 1,
           life: 15 + Math.random() * 10 | 0, ml: 25,
