@@ -782,9 +782,9 @@
       g.font = 'bold ' + Math.max(32, W * 0.09 | 0) + 'px monospace';
       g.fillText('CRASHED!', W / 2, H * 0.35);
       g.fillStyle = '#fff';
-      g.font = Math.max(18, W * 0.05 | 0) + 'px monospace';
-      g.fillText('Score: ' + Math.floor(score), W / 2, H * 0.47);
-      g.fillText('Distance: ' + Math.floor(pZ) + 'm', W / 2, H * 0.54);
+      g.font = Math.max(15, W * 0.05 | 0) + 'px monospace';
+      g.fillText('Score: ' + Math.floor(score), W / 2, H * 0.44);
+      g.fillText('Distance: ' + Math.floor(pZ) + 'm', W / 2, H * 0.52);
       if (maxCombo > 1) g.fillText('Max Combo: x' + maxCombo, W / 2, H * 0.61);
       if (Math.floor(score) >= hiScore && hiScore > 0) {
         g.fillStyle = '#ff0';
