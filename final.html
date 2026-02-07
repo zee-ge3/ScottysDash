@@ -341,8 +341,11 @@
       for (let i = particles.length - 1; i >= 0; i--) {
         let p = particles[i];
         p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--;
+        if (p.grow) { let acc = 1.01 + speed * 0.002; p.vx *= acc; p.vy *= acc; }
+        let age = 1 - p.life / p.ml;
+        let sz = p.grow ? p.sz * (1 + age * 3) : p.sz;
         g.fillStyle = `rgba(255,255,255,${p.life / p.ml})`;
-        g.fillRect(p.x, p.y, p.sz, p.sz);
+        g.fillRect(p.x - sz * 0.5, p.y - sz * 0.5, sz, sz);
         if (p.life <= 0) particles.splice(i, 1);
       }
     }
@@ -475,14 +478,25 @@
     }
 
     function ambientSnow() {
-      if (Math.random() < 0.3 + speed * 0.05) {
-        particles.push({
-          x: Math.random() * W, y: -5,
-          vx: turnRate * 0.5 + Math.random() - 0.5,
-          vy: 1 + Math.random() * 2 + speed * 0.3,
-          life: 60 + Math.random() * 40 | 0, ml: 100,
-          sz: 1 + Math.random() * 2
-        });
+      let n = 2 + (speed * 0.25 | 0);
+      for (let i = 0; i < n; i++) {
+        if (Math.random() < 0.6) {
+          // Spawn anywhere on screen, move outward from center like flying into snow
+          let sx = Math.random() * W;
+          let sy = Math.random() * H * 0.7;
+          let dx = sx - W * 0.5, dy = sy - H * 0.38;
+          let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          let spd = 0.4 + Math.random() * 1 + speed * 0.2;
+          let vyBase = (dy / dist) * spd;
+          if (vyBase < 0.2) vyBase = 0.2;
+          particles.push({
+            x: sx, y: sy,
+            vx: (dx / dist) * spd + turnRate * 0.3,
+            vy: vyBase + 0.3,
+            life: 60 + Math.random() * 40 | 0, ml: 100,
+            sz: 1 + Math.random() * 1.5, grow: 1
+          });
+        }
       }
     }
 
