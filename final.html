@@ -46,9 +46,37 @@
     let camX = 0, camY = 3, camZ = -5;
     let camAngle = 0;
     // Player screen position (updated by render, used by particles)
-    let pScrX = 0, pScrY = 0, pScrSc = 1, slopeVal = 0, lateralSlope = 0, prevSpd = 7.5, accelVal = 0, smoothFov = 0.65, dogTurn = 0;
+    let pScrX = 0, pScrY = 0, pScrSc = 1, slopeVal = 0, lateralSlope = 0, prevSpd = 14, accelVal = 0, smoothFov = 0.65, dogTurn = 0;
     // Terrain silhouette buffer - stores top-most rendered pixel and its depth per screen column
     let terrainSil = [], terrainSilD = [];
+
+    // Day cycle: 0=sunset, 0.25=night, 0.5=dawn, 0.75=day
+    let dayT = 0, dPh = {};
+    const dayPhases = [
+      { sky:[[45,30,60],[75,50,70],[150,85,55],[215,125,55],[242,160,48],[252,185,65]],
+        fog:[210,155,110], sunY:.35, sunA:.4, glow:.09,
+        sB:[110,90,80], sR:[140,120,100], sunStr:1, mtn:[90,70,70] },
+      { sky:[[8,5,25],[15,10,42],[25,15,58],[40,22,70],[50,28,80],[55,32,85]],
+        fog:[35,28,65], sunY:.55, sunA:.05, glow:0,
+        sB:[30,35,55], sR:[50,45,40], sunStr:0, mtn:[25,18,40] },
+      { sky:[[20,18,55],[50,35,85],[110,55,90],[190,105,110],[225,140,115],[245,165,125]],
+        fog:[180,130,140], sunY:.38, sunA:.3, glow:.07,
+        sB:[100,85,80], sR:[130,110,90], sunStr:.7, mtn:[70,45,75] },
+      { sky:[[58,127,183],[100,160,210],[140,195,230],[192,221,240],[210,230,240],[224,232,240]],
+        fog:[192,221,240], sunY:.12, sunA:.6, glow:0,
+        sB:[90,95,110], sR:[160,155,140], sunStr:.3, mtn:[100,110,130] }
+    ];
+    const dayB = [0, 0.3, 0.4, 0.7]; // phase starts: sunset 30%, night 10%, dawn 30%, day 30%
+    function updateDay() {
+      let t = dayT % 1, i = t < dayB[1] ? 0 : t < dayB[2] ? 1 : t < dayB[3] ? 2 : 3;
+      let j = (i + 1) % 4, f = (t - dayB[i]) / ((i < 3 ? dayB[i + 1] : 1) - dayB[i]);
+      let a = dayPhases[i], b = dayPhases[j];
+      let lv = (x, y) => x + (y - x) * f, la = (x, y) => x.map((v, k) => v + (y[k] - v) * f);
+      dPh = { sky: a.sky.map((c, k) => la(c, b.sky[k])), fog: la(a.fog, b.fog),
+        sunY: lv(a.sunY, b.sunY), sunA: lv(a.sunA, b.sunA), glow: lv(a.glow, b.glow),
+        sB: la(a.sB, b.sB), sR: la(a.sR, b.sR), sunStr: lv(a.sunStr, b.sunStr), mtn: la(a.mtn, b.mtn) };
+    }
+    updateDay();
 
     function lerp(a, b, t) { return a + (b - a) * t }
 
@@ -82,7 +110,7 @@
       let horizon = H * 0.38;
       let focal = H * smoothFov;
       let colStep = W > 1200 ? 4 : 3;
-      let skyR = 192, skyG2 = 221, skyB = 240; // fog/sky color #c0ddf0
+      let skyR = dPh.fog[0], skyG2 = dPh.fog[1], skyB = dPh.fog[2];
 
       // Reset silhouette buffer (Y position and depth of topmost terrain pixel)
       terrainSil = new Array(W).fill(H);
@@ -108,15 +136,21 @@
           if (screenY < maxY) {
             // Snow color based on height relative to player
             let t = 1 - Math.max(0, Math.min(1, (h - pY + 8) / 16));
-            let baseR = 90 + t * 160;
-            let baseG = 95 + t * 155;
-            let baseB = 110 + t * 140;
+            let baseR = dPh.sB[0] + t * dPh.sR[0];
+            let baseG = dPh.sB[1] + t * dPh.sR[1];
+            let baseB = dPh.sB[2] + t * dPh.sR[2];
 
             // Slope shading via height offset sampling
             let hFwd = getHeight(wx + rayDx * 0.5, wz + rayDz * 0.5);
             let slopeDh = hFwd - h;
-            if (slopeDh > 0.03) { let sh = Math.min(0.45, slopeDh * 0.8); baseR += sh * 90; baseG += sh * 85; baseB += sh * 50; }
-            else if (slopeDh < -0.03) { let sh = Math.min(0.45, -slopeDh * 0.8); baseR -= sh * 70; baseG -= sh * 60; baseB += sh * 30; }
+            if (slopeDh > 0.03) { let sh = Math.min(0.45, slopeDh * 0.8); baseR += sh * 80; baseG += sh * 60; baseB += sh * 30; }
+            else if (slopeDh < -0.03) { let sh = Math.min(0.45, -slopeDh * 0.8); baseR -= sh * 50; baseG -= sh * 50; baseB -= sh * 20; }
+            // Directional sun lighting — sun from the right
+            let hLeft = getHeight(wx - 0.4, wz);
+            let hRight = getHeight(wx + 0.4, wz);
+            let crossSlope = (hRight - hLeft) * 1.5;
+            if (crossSlope > 0) { let sun = Math.min(0.5, crossSlope * 0.6) * dPh.sunStr; baseR += sun * 60; baseG += sun * 35; baseB -= sun * 10; }
+            else { let shd = Math.min(0.45, -crossSlope * 0.5) * dPh.sunStr; baseR -= shd * 40; baseG -= shd * 35; baseB += shd * 10; }
 
             // Distance fog blending
             let fogT = Math.min(1, dist * dist * 0.0004);
@@ -167,33 +201,57 @@
 
     // === 4. RENDERING: Project world from camera perspective ===
     function render() {
-      // Full-screen sky gradient
-      let skyG = g.createLinearGradient(0, 0, 0, H);
-      skyG.addColorStop(0, '#3a7fb7');
-      skyG.addColorStop(0.3, '#7ab8e0');
-      skyG.addColorStop(0.55, '#c0ddf0');
-      skyG.addColorStop(1, '#e0e8f0');
-      g.fillStyle = skyG;
+      // Full-screen sky gradient (dynamic day cycle)
+      let skyGr = g.createLinearGradient(0, 0, 0, H);
+      let skyStops = [0, 0.2, 0.4, 0.6, 0.8, 1];
+      for (let i = 0; i < 6; i++) { let c = dPh.sky[i]; skyGr.addColorStop(skyStops[i], `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`); }
+      g.fillStyle = skyGr;
       g.fillRect(0, 0, W, H);
 
-      // Sun
-      let sunX = W * 0.75, sunY = H * 0.12;
-      let sunG = g.createRadialGradient(sunX, sunY, 5, sunX, sunY, H * 0.13);
-      sunG.addColorStop(0, 'rgba(255,255,230,0.9)');
-      sunG.addColorStop(0.15, 'rgba(255,250,200,0.5)');
-      sunG.addColorStop(0.5, 'rgba(255,240,180,0.15)');
-      sunG.addColorStop(1, 'rgba(255,240,180,0)');
-      g.fillStyle = sunG;
-      g.beginPath(); g.arc(sunX, sunY, H * 0.13, 0, PI * 2); g.fill();
-      g.fillStyle = '#fffde8';
-      g.beginPath(); g.arc(sunX, sunY, 10, 0, PI * 2); g.fill();
+      // Stars (fade in at dusk, visible at night, fade out at dawn)
+      let starA = Math.max(0, Math.min(1, (0.3 - dPh.sunA) / 0.25));
+      if (starA > 0.01) {
+        for (let i = 0; i < 90; i++) {
+          let sx = ((i * 2654435761 + 7) >>> 0) % W;
+          let sy = ((i * 2246822519 + 13) >>> 0) % (H * 0.42);
+          let sz = 1 + (((i * 1013904223) >>> 0) % 3) * 0.5;
+          let twinkle = Math.sin(performance.now() * 0.001 + i * 2.3) * 0.3 + 0.7;
+          g.fillStyle = `rgba(255,255,240,${(starA * twinkle * 0.85).toFixed(2)})`;
+          g.fillRect(sx, sy, sz, sz);
+        }
+      }
 
-      // Mountain ranges with parallax (far to near, each fills to screen bottom)
+      // Sun / moon
+      let sunX = W * 0.78, sunYp = H * dPh.sunY;
+      if (dPh.sunA > 0.02) {
+        let sunH2 = g.createRadialGradient(sunX, sunYp, 0, sunX, sunYp, H * 0.35);
+        sunH2.addColorStop(0, `rgba(255,200,80,${dPh.sunA.toFixed(2)})`);
+        sunH2.addColorStop(0.3, `rgba(255,160,60,${(dPh.sunA * 0.375).toFixed(2)})`);
+        sunH2.addColorStop(0.7, `rgba(255,120,40,${(dPh.sunA * 0.125).toFixed(2)})`);
+        sunH2.addColorStop(1, 'rgba(255,100,30,0)');
+        g.fillStyle = sunH2;
+        g.beginPath(); g.arc(sunX, sunYp, H * 0.35, 0, PI * 2); g.fill();
+        let sIG = g.createRadialGradient(sunX, sunYp, 3, sunX, sunYp, H * 0.1);
+        sIG.addColorStop(0, `rgba(255,250,200,${Math.min(0.95, dPh.sunA * 2.4).toFixed(2)})`);
+        sIG.addColorStop(0.2, `rgba(255,220,140,${Math.min(0.7, dPh.sunA * 1.75).toFixed(2)})`);
+        sIG.addColorStop(0.6, `rgba(255,180,80,${Math.min(0.2, dPh.sunA * 0.5).toFixed(2)})`);
+        sIG.addColorStop(1, 'rgba(255,150,60,0)');
+        g.fillStyle = sIG;
+        g.beginPath(); g.arc(sunX, sunYp, H * 0.1, 0, PI * 2); g.fill();
+        g.fillStyle = `rgba(255,240,192,${Math.min(1, dPh.sunA * 2.5).toFixed(2)})`;
+        g.beginPath(); g.arc(sunX, sunYp, 11, 0, PI * 2); g.fill();
+      }
+
+      // Mountain ranges with parallax (derived from fog + base color)
       let px = -camAngle * W * 0.6, fz = camZ * 0.05;
-      drawMtn(H * 0.22, 100, 0.5, '#b0c0d4', -px * 0.15 + fz * 0.2, '#e8eef4', .2);
-      drawMtn(H * 0.30, 85, 1.7, '#9aabbd', -px * 0.35 + fz * 0.4, '#d0dce8', .35);
-      drawMtn(H * 0.38, 65, 3.1, '#8494a8', -px * 0.7 + fz * 1, '#c0cad6', .25);
-      drawMtn(H * 0.45, 50, 5.3, '#7080a0', -px * 1.2 + fz * 1.5);
+      let mc = (r, gv, b) => `rgb(${r|0},${gv|0},${b|0})`;
+      let mL = (d) => [dPh.mtn[0]*(1-d)+dPh.fog[0]*d, dPh.mtn[1]*(1-d)+dPh.fog[1]*d, dPh.mtn[2]*(1-d)+dPh.fog[2]*d];
+      let sL = (d) => { let m = mL(d); return [Math.min(255, m[0]+35), Math.min(255, m[1]+25), Math.min(255, m[2]+15)]; };
+      let m0=mL(.7),m1=mL(.6),m2=mL(.45),m3=mL(.3),s0=sL(.75),s1=sL(.65),s2=sL(.5);
+      drawMtn(H * 0.22, 100, 0.5, mc(...m0), -px * 0.15 + fz * 0.2, mc(...s0), .2);
+      drawMtn(H * 0.30, 85, 1.7, mc(...m1), -px * 0.35 + fz * 0.4, mc(...s1), .35);
+      drawMtn(H * 0.38, 65, 3.1, mc(...m2), -px * 0.7 + fz * 1, mc(...s2), .25);
+      drawMtn(H * 0.45, 50, 5.3, mc(...m3), -px * 1.2 + fz * 1.5);
 
       // 3D column raycaster terrain
       renderTerrain();
@@ -202,7 +260,7 @@
       if (state == 1 || state == 2) renderObstacles();
 
       // Speed streaks (from player)
-      if (speed >= 13 && state == 1) {
+      if (speed >= 20 && state == 1) {
         let spdF = 10 + (speed - 13) * 14 / 17;
         let n = spdF | 0;
         for (let i = 0; i < n; i++) {
@@ -210,7 +268,7 @@
           let r1 = W * 0.25 + Math.random() * W * 0.15;
           let r2 = r1 + 40 + (accelVal + spdF) * 60;
           let dx = Math.cos(a), dy = Math.sin(a) * 0.6;
-          g.strokeStyle = `rgba(255,255,255,${Math.min(0.5, 0.3 + (spdF - 10) * 0.2 / 14)})`;
+          g.strokeStyle = `rgba(255,230,180,${Math.min(0.5, 0.3 + (spdF - 10) * 0.2 / 14)})`;
           g.lineWidth = 1 + Math.random() * 1.5;
           g.beginPath();
           g.moveTo(pScrX + dx * r1, pScrY + dy * r1);
@@ -341,12 +399,19 @@
       for (let i = particles.length - 1; i >= 0; i--) {
         let p = particles[i];
         p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--;
-        if (p.grow) { let acc = 1.01 + speed * 0.002; p.vx *= acc; p.vy *= acc; }
-        let age = 1 - p.life / p.ml;
-        let sz = p.grow ? p.sz * (1 + age * 3) : p.sz;
-        g.fillStyle = `rgba(255,255,255,${p.life / p.ml})`;
-        g.fillRect(p.x - sz * 0.5, p.y - sz * 0.5, sz, sz);
+        g.fillStyle = `rgba(255,230,190,${p.life / p.ml})`;
+        g.fillRect(p.x, p.y, p.sz, p.sz);
         if (p.life <= 0) particles.splice(i, 1);
+      }
+
+      // Glow overlay (dynamic)
+      if (dPh.glow > 0.005) {
+        let glowG = g.createRadialGradient(W * 0.78, H * dPh.sunY, 0, W * 0.78, H * dPh.sunY, W * 0.6);
+        glowG.addColorStop(0, `rgba(255,160,40,${dPh.glow.toFixed(3)})`);
+        glowG.addColorStop(0.5, `rgba(255,120,20,${(dPh.glow * 0.5).toFixed(3)})`);
+        glowG.addColorStop(1, 'rgba(255,80,10,0)');
+        g.fillStyle = glowG;
+        g.fillRect(0, 0, W, H);
       }
     }
 
@@ -510,8 +575,9 @@
     }
 
     function spawnObstacles() {
-      // Cell size in world units
-      let cellZ = 5, cellX = 6;
+      // Small cells = dense obstacles, shrinks further with progression
+      let cellZ = Math.max(3.6, 3 - pZ / 2000);
+      let cellX = Math.max(4.4, 3.5 - pZ / 2000);
       // Range around player to populate
       let rangeX = 60; // far left/right of player
       let rangeZbehind = 10, rangeZahead = 80;
@@ -534,24 +600,25 @@
           let r2 = seedRand(cx * 37, cz * 73);
           let r3 = seedRand(cz * 113, cx * 191);
 
-          // ~60% chance a cell has an obstacle (density increases over time)
-          let density = 0.55 + Math.min(0.25, pZ / 2000);
-          if (r1 > density) continue;
-
           // Position within cell
           let oz = cz * cellZ + r2 * cellZ;
           let ox = cx * cellX + r3 * cellX;
 
-          // Don't spawn right on top of player start
-          if (oz < 20 && Math.abs(ox) < 8) continue;
+          // Don't spawn near player at game start
+          if (oz < pZ + 30 && oz > pZ - 5 && Math.abs(ox - pX) < 10 && score < 100) continue;
 
-          // Leave a safe corridor near the player's current path
-          // (only for obstacles at roughly the same Z)
+          // Density: 50% (0-2000) → 70% (2000-4000) → 90% (4000+)
+          // Obstacles directly ahead always spawn to force weaving
+          let density = pZ < 2000 ? 0.275 : pZ < 4000 ? 0.275 + 0.075 * (pZ - 2000) / 2000 : 0.35 + 0.075 * Math.min(1, (pZ - 4000) / 2000);
           let dzToPlayer = oz - pZ;
-          if (dzToPlayer > 5 && dzToPlayer < 20 && Math.abs(ox - pX) < 3) continue;
+          let dxToPlayer = Math.abs(ox - pX);
+          let aheadCenter = dzToPlayer > 5 && dzToPlayer < 25 && dxToPlayer < 4;
+          if (!aheadCenter && r1 > density) continue;
 
           let type = r2 < 0.5 ? 0 : r2 < 0.8 ? 1 : 2;
-          obstacles.push({ x: ox, z: oz, type, hit: false });
+          let scale = 0.6 + seedRand(cz * 7, cx * 13) * 0.8;
+          let variant = seedRand(cz * 31, cx * 59);
+          obstacles.push({ x: ox, z: oz, type, hit: false, scale, variant, key });
         }
       }
     }
@@ -560,99 +627,87 @@
     let spawnedCells = new Set();
 
     function cleanupObstacles() {
-      let cellZ = 5, cellX = 6;
       for (let i = obstacles.length - 1; i >= 0; i--) {
         let ob = obstacles[i];
-        // Remove if far behind or far to the side
         if (ob.z < pZ - 25 || Math.abs(ob.x - pX) > 80) {
-          // Also remove the cell key so it can respawn if we come back (won't happen in practice)
-          let cz = Math.floor(ob.z / cellZ);
-          let cx = Math.floor(ob.x / cellX);
-          spawnedCells.delete(cz * 10000 + cx);
+          spawnedCells.delete(ob.key);
           obstacles.splice(i, 1);
         }
       }
     }
 
-    function drawTree(sx, sy, sc, type, fogT) {
-      // Fog blends colors toward sky
-      let skyR = 192, skyG = 221, skyB = 240;
+    function drawTree(sx, sy, sc, type, fogT, vr) {
+      let skyR = dPh.fog[0], skyG = dPh.fog[1], skyB = dPh.fog[2];
       function fogCol(r, gv, b) {
         return `rgb(${(r * (1 - fogT) + skyR * fogT) | 0},${(gv * (1 - fogT) + skyG * fogT) | 0},${(b * (1 - fogT) + skyB * fogT) | 0})`;
       }
       if (type === 0) {
-        // Pine tree - triangle layers
+        // Pine tree - 3 layers always, vary width (narrow/normal/bushy)
+        let wMul = vr < 0.33 ? 0.7 : vr < 0.66 ? 1 : 1.2;
         let h = sc * 16;
-        let w = sc * 7.2;
-        // Trunk
+        let w = sc * 7.2 * wMul;
         g.fillStyle = fogCol(70, 45, 20);
         g.fillRect(sx - sc * 0.2, sy - h * 0.15, sc * 0.4, h * 0.2);
-        // Tree layers (bottom to top)
         for (let i = 0; i < 3; i++) {
           let ly = sy - h * 0.15 - h * i * 0.22;
           let lw = w * (1 - i * 0.22);
-          // Dark green body
           g.fillStyle = fogCol(20 + i * 8, 70 + i * 10, 30 + i * 5);
-          g.beginPath();
-          g.moveTo(sx - lw, ly);
-          g.lineTo(sx, ly - h * 0.32);
-          g.lineTo(sx + lw, ly);
-          g.closePath();
-          g.fill();
+          g.beginPath(); g.moveTo(sx - lw, ly); g.lineTo(sx, ly - h * 0.32); g.lineTo(sx + lw, ly); g.closePath(); g.fill();
         }
-        // Snow on branches
-        g.fillStyle = fogCol(230, 240, 245);
+        g.fillStyle = fogCol(240, 215, 190);
         for (let i = 0; i < 3; i++) {
           let ly = sy - h * 0.15 - h * i * 0.22;
           let lw = w * (1 - i * 0.22) * 0.65;
-          g.beginPath();
-          g.moveTo(sx - lw, ly - h * 0.04);
-          g.lineTo(sx, ly - h * 0.32);
-          g.lineTo(sx + lw, ly - h * 0.04);
-          g.closePath();
-          g.fill();
+          g.beginPath(); g.moveTo(sx - lw, ly - h * 0.04); g.lineTo(sx, ly - h * 0.32); g.lineTo(sx + lw, ly - h * 0.04); g.closePath(); g.fill();
         }
       } else if (type === 1) {
-        // Rock
         let sz = sc * 6.4;
-        g.fillStyle = fogCol(85, 90, 105);
-        g.beginPath();
-        g.moveTo(sx - sz, sy);
-        g.lineTo(sx - sz * 0.7, sy - sz * 1.1);
-        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
-        g.lineTo(sx + sz, sy - sz * 0.7);
-        g.lineTo(sx + sz * 0.8, sy);
-        g.closePath();
-        g.fill();
-        // Highlight
-        g.fillStyle = fogCol(120, 125, 140);
-        g.beginPath();
-        g.moveTo(sx - sz * 0.6, sy - sz * 0.6);
-        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
-        g.lineTo(sx + sz * 0.7, sy - sz * 0.8);
-        g.closePath();
-        g.fill();
-        // Snow cap
-        g.fillStyle = fogCol(210, 220, 230);
-        g.beginPath();
-        g.moveTo(sx - sz * 0.4, sy - sz * 0.95);
-        g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
-        g.lineTo(sx + sz * 0.65, sy - sz * 0.8);
-        g.closePath();
-        g.fill();
+        let bg = sz * 0.35; // bury into ground
+        if (vr < 0.33) {
+          // Angular rock
+          g.fillStyle = fogCol(85, 90, 105);
+          g.beginPath(); g.moveTo(sx - sz, sy + bg); g.lineTo(sx - sz * 0.7, sy - sz * 1.1); g.lineTo(sx + sz * 0.3, sy - sz * 1.5);
+          g.lineTo(sx + sz, sy - sz * 0.7); g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(120, 125, 140);
+          g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.6); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.7, sy - sz * 0.8); g.closePath(); g.fill();
+          g.fillStyle = fogCol(225, 195, 170);
+          g.beginPath(); g.moveTo(sx - sz * 0.4, sy - sz * 0.95); g.lineTo(sx + sz * 0.3, sy - sz * 1.5); g.lineTo(sx + sz * 0.65, sy - sz * 0.8); g.closePath(); g.fill();
+        } else if (vr < 0.66) {
+          // Round boulder
+          g.fillStyle = fogCol(80, 85, 100);
+          g.beginPath(); g.moveTo(sx - sz * 0.9, sy + bg); g.lineTo(sx - sz, sy - sz * 0.5); g.lineTo(sx - sz * 0.6, sy - sz * 1.1);
+          g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.7, sy - sz * 1.0); g.lineTo(sx + sz * 0.9, sy - sz * 0.4);
+          g.lineTo(sx + sz * 0.8, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(115, 120, 135);
+          g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.7); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.closePath(); g.fill();
+          g.fillStyle = fogCol(225, 200, 175);
+          g.beginPath(); g.moveTo(sx - sz * 0.3, sy - sz * 0.9); g.lineTo(sx + sz * 0.1, sy - sz * 1.3); g.lineTo(sx + sz * 0.5, sy - sz * 0.85); g.closePath(); g.fill();
+        } else {
+          // Flat wide slab
+          g.fillStyle = fogCol(90, 95, 108);
+          g.beginPath(); g.moveTo(sx - sz * 1.2, sy + bg); g.lineTo(sx - sz * 1.0, sy - sz * 0.6); g.lineTo(sx - sz * 0.2, sy - sz * 0.8);
+          g.lineTo(sx + sz * 0.6, sy - sz * 0.7); g.lineTo(sx + sz * 1.1, sy - sz * 0.3); g.lineTo(sx + sz * 1.0, sy + bg); g.closePath(); g.fill();
+          g.fillStyle = fogCol(125, 130, 142);
+          g.beginPath(); g.moveTo(sx - sz * 0.5, sy - sz * 0.45); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.5, sy - sz * 0.55); g.closePath(); g.fill();
+          g.fillStyle = fogCol(225, 200, 175);
+          g.beginPath(); g.moveTo(sx - sz * 0.6, sy - sz * 0.5); g.lineTo(sx - sz * 0.2, sy - sz * 0.8); g.lineTo(sx + sz * 0.4, sy - sz * 0.55); g.closePath(); g.fill();
+        }
       } else {
-        // Bare tree / dead tree
+        // Bare tree - vary branch count and lean
         let h = sc * 14;
+        let lean = (vr - 0.5) * sc * 2;
+        let nBranch = vr < 0.33 ? 3 : vr < 0.66 ? 4 : 5;
         g.strokeStyle = fogCol(60, 42, 25);
         g.lineWidth = Math.max(1.5, sc * 1);
-        // Trunk
-        g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx, sy - h); g.stroke();
-        // Branches
+        g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + lean, sy - h); g.stroke();
         g.lineWidth = Math.max(1, sc * 0.6);
-        g.beginPath(); g.moveTo(sx, sy - h * 0.45); g.lineTo(sx - sc * 5.2, sy - h * 0.65); g.stroke();
-        g.beginPath(); g.moveTo(sx, sy - h * 0.58); g.lineTo(sx + sc * 6, sy - h * 0.78); g.stroke();
-        g.beginPath(); g.moveTo(sx, sy - h * 0.72); g.lineTo(sx - sc * 3.2, sy - h * 0.92); g.stroke();
-        g.beginPath(); g.moveTo(sx, sy - h * 0.85); g.lineTo(sx + sc * 2.4, sy - h * 0.98); g.stroke();
+        for (let i = 0; i < nBranch; i++) {
+          let t = 0.35 + i * 0.55 / nBranch;
+          let dir = (i % 2 === 0) ? -1 : 1;
+          let bx = sx + lean * t + dir * sc * (3 + vr * 3);
+          let by2 = sy - h * (t + 0.15 + vr * 0.05);
+          g.beginPath(); g.moveTo(sx + lean * t, sy - h * t); g.lineTo(bx, by2); g.stroke();
+        }
       }
     }
 
@@ -691,13 +746,26 @@
         let baseY = p.y;
         if (p.y < terrainSil[col]) baseY = terrainSil[col];
 
-        visible.push({ ob, p, wy, crest, baseY });
+        visible.push({ ob, p, wy, crest, baseY, scale: ob.scale || 1, variant: ob.variant || 0 });
       }
       visible.sort((a, b) => b.p.z - a.p.z);
       for (let i = 0; i < visible.length; i++) {
-        let { ob, p, wy, crest, baseY } = visible[i];
-        let sc = 80 / p.z;
-        let fogT = Math.min(1, p.z * p.z * 0.0004);
+        let { ob, p, wy, crest, baseY, scale, variant } = visible[i];
+        let sc = 80 / p.z * scale;
+        let fogT = Math.min(1, p.z * p.z * 0.0006);
+
+        // Directional shadow (sun from right)
+        let shAlpha = 0.18 * (1 - fogT) * dPh.sunStr;
+        let shLen = sc * 3.5, shW = sc * 0.5;
+        if (ob.type === 0) shLen = sc * 4.5;
+        else if (ob.type === 2) shLen = sc * 4.0;
+        else if (ob.type === 1) { shLen = sc * 2.5; shW = sc * 0.7; }
+        g.save();
+        g.translate(p.x, baseY);
+        g.transform(1, 0, -0.6, 0.18, 0, 0);
+        g.fillStyle = `rgba(40,25,30,${shAlpha.toFixed(2)})`;
+        g.fillRect(-shLen, -shW * 0.5, shLen, shW);
+        g.restore();
 
         g.save();
         if (crest) {
@@ -725,11 +793,9 @@
           g.clip();
         }
 
-        // Shadow on ground
-        g.fillStyle = `rgba(0,0,0,${0.15 * (1 - fogT)})`;
-        let shSz = sc * 0.8;
-        g.beginPath(); g.ellipse(p.x, baseY + shSz * 0.15, shSz * 1.2, shSz * 0.25, 0, 0, PI * 2); g.fill();
-        drawTree(p.x, baseY, sc, ob.type, fogT);
+        // Clip below ground so buried rock bases don't draw over terrain
+        g.beginPath(); g.rect(-20, 0, W + 40, baseY); g.clip();
+        drawTree(p.x, baseY, sc, ob.type, fogT, variant);
         g.restore();
       }
     }
@@ -737,19 +803,20 @@
     function checkCollisions() {
       // Only the rider triggers a crash - rider sits at pX, pZ
       // Rider body is narrow (~0.6 world units wide)
-      let hitRadiusX = 0.7;
-      let hitRadiusZ = 1.0;
       for (let i = 0; i < obstacles.length; i++) {
         let ob = obstacles[i];
         if (ob.hit) continue;
         let dz = ob.z - pZ;
         let dx = ob.x - pX;
-        if (Math.abs(dz) < hitRadiusZ && Math.abs(dx) < hitRadiusX) {
+        let s = ob.scale || 1;
+        let hx = ob.type === 1 ? 1.2 : 0.7;
+        if (Math.abs(dz) < 1.0 * s && Math.abs(dx) < hx * s) {
           ob.hit = true;
           // CRASH!
           crashed = 1;
           state = 2;
           crashTimer = 1.5;
+          playCrashSfx();
           // Screen shake
           shakeX = (Math.random() - 0.5) * 20;
           shakeY = (Math.random() - 0.5) * 15;
@@ -775,6 +842,7 @@
     function update(dt) {
       if (state != 1) return;
       if (dt > 0.1) dt = 0.1;
+      dayT = (dayT + speed * dt * 0.5 * 0.0032) % 1;
 
       // === 2. PLAYER POSITIONING: Snap to ground ===
       // Slope: negative=downhill (fast), positive=uphill (slow)
@@ -789,18 +857,25 @@
       let dragMult = inputTuck ? 0.6 : 1;
       let airDrag = speed * speed * 0.001 * dragMult;
 
+      // Progressive difficulty: speed floor/cap and steering scale with score
+      let prog = Math.min(1, score / 8000);
+      let rampUp = Math.min(1, pZ / 30);
+      let minSpd = rampUp * 14 + prog * 10;
+      let maxSpd = 35 + prog * 15;
+      let steerMul = 1 + prog * 0.6;
+
       speed += gravity * dt;
       speed -= (friction + turnDrag) * speed * dt;
       speed -= airDrag * dt;
       if (slopeVal > 0) speed -= slopeVal * slopeVal * 0.15 * dt;
-      speed = Math.max(7.5, Math.min(speed, 30));
+      speed = Math.max(minSpd, Math.min(speed, maxSpd));
       accelVal = lerp(accelVal, Math.max(0, (speed - prevSpd) / dt), Math.min(1, dt * 10));
       prevSpd = speed;
 
       // Steering
       let curv = curvature(pZ) * 0.002;
-      turnRate += (inputX * 2.5 - turnRate) * dt * .6;
-      pX += dogTurn * dt * 4.0;
+      turnRate += (inputX * 2.5 * steerMul - turnRate) * dt * 1.2;
+      pX += dogTurn * dt * 4.0 * steerMul;
       pX += curv * speed * dt * 0.1;
 
       // Move forward
@@ -866,14 +941,34 @@
 
     function drawTitle() {
       g.textAlign = 'center';
-      g.fillStyle = '#fff';
-      g.font = 'bold ' + Math.max(36, W * 0.1 | 0) + 'px monospace';
-      g.fillText('Scotty\'s', W / 2, H * 0.28);
-      g.fillText('Dash', W / 2, H * 0.38);
+      // Draw "Scotty's" first (background layer)
+      g.font='bold '+Math.max(36,W*0.1|0)+'px monospace'; // Original font for Scotty's
+      g.fillStyle='rgb(255, 255, 200)'; // Light yellow for Scotty's
+      g.fillText("Scotty's",W/2, H*0.24); // Position more to the left and higher
 
-      g.font = Math.max(14, W * 0.04 | 0) + 'px monospace';
-      g.fillStyle = 'rgba(255,255,255,0.7)';
-      g.fillText('Don\'t be late for class!', W / 2, H * 0.48);
+      // Draw "DASH" second (foreground layer), slightly lower and to the right
+      g.font='bold '+Math.max(50,W*0.15|0)+'px monospace'; // Larger font for DASH
+      g.fillStyle='rgb(255, 100, 0)'; // Sunset color for DASH
+      g.fillText('DASH', W/2,H*0.42); // Position lower and more to the right
+
+      /*
+      // Left side: "Don't be late to class"
+      g.save(); // Save current canvas state
+      g.translate(W * 0.15, H *0.6); // Move origin to desired text center
+      g.rotate(-Math.PI / 6); // Rotate 90 degrees counter-clockwise
+      g.textAlign='center'; // Center text on the new origin
+      g.fillStyle='rgb(255, 255, 0)'; // Yellow color
+      g.font='bold '+Math.max(10, W * 0.025 | 0)+'px monospace'; // Small font
+      let message1 = "Don't be late";
+      let message2 = "to class!";
+      let lineHeight = Math.max(10, W * 0.025 | 0) * 1.2; // Approximate line height based on font size
+
+      // Draw first line
+      g.fillText(message1, 0, -lineHeight / 2); // Center message1 slightly above origin
+      // Draw second line
+      g.fillText(message2, 0, lineHeight /  2); // Center message2 slightly below origin
+      g.restore(); // Restore canvas state
+      */
 
       if (Date.now() % 1000 < 600) { 
         g.fillStyle = '#fff';
@@ -887,7 +982,7 @@
         g.fillText('Best: ' + hiScore, W / 2, H * 0.72);
       }
 
-      g.fillStyle = 'rgba(255,255,255,0.5)';
+      g.fillStyle = 'rgba(255,230,190,0.5)';
       g.font = Math.max(11, W * 0.03 | 0) + 'px monospace';
       g.fillText('Touch sides to steer', W / 2, H * 0.82);
       g.fillText('Arrow keys / mouse on desktop', W / 2, H * 0.87);
@@ -901,9 +996,9 @@
       g.font = 'bold ' + Math.max(32, W * 0.09 | 0) + 'px monospace';
       g.fillText('CRASHED!', W / 2, H * 0.35);
       g.fillStyle = '#fff';
-      g.font = Math.max(18, W * 0.05 | 0) + 'px monospace';
-      g.fillText('Score: ' + Math.floor(score), W / 2, H * 0.47);
-      g.fillText('Distance: ' + Math.floor(pZ) + 'm', W / 2, H * 0.54);
+      g.font = Math.max(15, W * 0.05 | 0) + 'px monospace';
+      g.fillText('Score: ' + Math.floor(score), W / 2, H * 0.44);
+      g.fillText('Distance: ' + Math.floor(pZ) + 'm', W / 2, H * 0.52);
       if (maxCombo > 1) g.fillText('Max Combo: x' + maxCombo, W / 2, H * 0.61);
       if (Math.floor(score) >= hiScore && hiScore > 0) {
         g.fillStyle = '#ff0';
@@ -920,11 +1015,11 @@
       pX = 0; pZ = 0;
       for (let z = 0; z < 200; z++) { if (getHeight(0, z + 2) - getHeight(0, z - 2) < -0.3) { pZ = z; break; } }
       pY = getHeight(0, pZ);
-      speed = 7.5; turnRate = 0;
+      speed = 0; turnRate = 0;
       camX = 0; camY = pY + 2; camZ = pZ - 3; camAngle = 0;
       score = 0; combo = 1; maxCombo = 1; crashed = 0; crashTimer = 0;
-      particles = []; shakeX = 0; shakeY = 0; prevSpd = 7.5; accelVal = 0; smoothFov = 0.65; dogTurn = 0; trailHist = [];
-      obstacles = []; lastSpawnZ = 0; spawnedCells = new Set();
+      particles = []; shakeX = 0; shakeY = 0; prevSpd = 14; accelVal = 0; smoothFov = 0.65; dogTurn = 0;
+      obstacles = []; lastSpawnZ = 0; spawnedCells = new Set(); dayT = 0;
     }
 
     let keys = {};
@@ -945,7 +1040,171 @@
     c.addEventListener('mousemove', e => { if (mouseDown) { mouseX = e.clientX; mouseY = e.clientY } });
     c.addEventListener('mouseup', () => { mouseDown = 0 });
 
+    // === AUDIO SYSTEM ===
+    let ax, aInited = 0, aM, noiseBuf;
+    let aWindG, aWindF, wg2, aPadG, padF, padOscs = [], aRunG, aRunF, aCarvG, aCarvF, aCarvF2, aChimeG;
+    let chordIdx = 0, chordTimer = 7, chimeTimer = 3, arpStep = 0, arpTimer = 1;
+    let carveBurst = 0, prevTurnAbs = 0, carveVol = 0, smoothTempo = 1;
+    let chords = [[65.4,130.8,164.8,196],[55,130.8,164.8,196],[43.7,130.8,164.8,174.6],[49,123.5,146.8,196]];
+    let chimeScales = [[523.3,659.3,784,1046.5,1318.5],[523.3,659.3,784,880,1046.5],[523.3,587.3,698.5,880,1046.5],[587.3,784,988,1174.7,1568]];
+
+    function initAudio() {
+      if (aInited) return;
+      ax = new (window.AudioContext || window.webkitAudioContext)();
+      aInited = 1;
+      // Master gain
+      aM = ax.createGain(); aM.gain.value = 0.6; aM.connect(ax.destination);
+      // Shared noise buffer
+      noiseBuf = ax.createBuffer(1, ax.sampleRate, ax.sampleRate);
+      let nd = noiseBuf.getChannelData(0);
+      for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+
+      // Wind main
+      let wn = ax.createBufferSource(); wn.buffer = noiseBuf; wn.loop = true;
+      aWindF = ax.createBiquadFilter(); aWindF.type = 'bandpass'; aWindF.frequency.value = 400; aWindF.Q.value = 0.35;
+      aWindG = ax.createGain(); aWindG.gain.value = 0.15;
+      wn.connect(aWindF); aWindF.connect(aWindG); aWindG.connect(aM); wn.start();
+
+      // Wind gust
+      let wn2 = ax.createBufferSource(); wn2.buffer = noiseBuf; wn2.loop = true;
+      let wf2 = ax.createBiquadFilter(); wf2.type = 'bandpass'; wf2.frequency.value = 180; wf2.Q.value = 0.4;
+      wg2 = ax.createGain(); wg2.gain.value = 0.04;
+      wn2.connect(wf2); wf2.connect(wg2); wg2.connect(aM); wn2.start();
+      let wLfo = ax.createOscillator(); wLfo.type = 'sine'; wLfo.frequency.value = 0.15;
+      let wLfoG = ax.createGain(); wLfoG.gain.value = 0.06;
+      wLfo.connect(wLfoG); wLfoG.connect(wg2.gain); wLfo.start();
+
+      // Pad chords
+      padF = ax.createBiquadFilter(); padF.type = 'lowpass'; padF.frequency.value = 600; padF.Q.value = 0.3;
+      aPadG = ax.createGain(); aPadG.gain.value = 0.04;
+      padF.connect(aPadG); aPadG.connect(aM);
+      for (let i = 0; i < 4; i++) {
+        let o = ax.createOscillator(); o.type = 'triangle'; o.frequency.value = chords[0][i];
+        o.connect(padF); o.start(); padOscs.push(o);
+      }
+      let pLfo = ax.createOscillator(); pLfo.type = 'sine'; pLfo.frequency.value = 0.06;
+      let pLfoG = ax.createGain(); pLfoG.gain.value = 0.03;
+      pLfo.connect(pLfoG); pLfoG.connect(aPadG.gain); pLfo.start();
+      let pLfo2 = ax.createOscillator(); pLfo2.type = 'sine'; pLfo2.frequency.value = 0.13;
+      let pLfo2G = ax.createGain(); pLfo2G.gain.value = 0.5;
+      pLfo2.connect(pLfo2G); pLfo2G.connect(padOscs[2].detune); pLfo2.start();
+
+      // Runner hiss
+      let rn = ax.createBufferSource(); rn.buffer = noiseBuf; rn.loop = true;
+      aRunF = ax.createBiquadFilter(); aRunF.type = 'highpass'; aRunF.frequency.value = 2000; aRunF.Q.value = 0.3;
+      aRunG = ax.createGain(); aRunG.gain.value = 0;
+      rn.connect(aRunF); aRunF.connect(aRunG); aRunG.connect(aM); rn.start();
+
+      // Carve
+      let cn = ax.createBufferSource(); cn.buffer = noiseBuf; cn.loop = true;
+      aCarvF = ax.createBiquadFilter(); aCarvF.type = 'bandpass'; aCarvF.frequency.value = 600; aCarvF.Q.value = 0.6;
+      aCarvF2 = ax.createBiquadFilter(); aCarvF2.type = 'peaking'; aCarvF2.frequency.value = 1200; aCarvF2.gain.value = 5; aCarvF2.Q.value = 0.5;
+      aCarvG = ax.createGain(); aCarvG.gain.value = 0;
+      cn.connect(aCarvF); aCarvF.connect(aCarvF2); aCarvF2.connect(aCarvG); aCarvG.connect(aM); cn.start();
+
+      // Chime bus
+      aChimeG = ax.createGain(); aChimeG.gain.value = 0.4; aChimeG.connect(aM);
+    }
+
+    function playChime() {
+      let sc = chimeScales[chordIdx];
+      let f = sc[(Math.random() * sc.length) | 0];
+      let t = ax.currentTime;
+      let g1 = ax.createGain(); g1.gain.setValueAtTime(0, t); g1.gain.linearRampToValueAtTime(0.15, t + 0.25);
+      g1.gain.setTargetAtTime(0, t + 0.3, 0.7 + Math.random() * 0.8); g1.connect(aChimeG);
+      let o1 = ax.createOscillator(); o1.type = 'sine'; o1.frequency.value = f; o1.connect(g1); o1.start(t); o1.stop(t + 5);
+      let g2 = ax.createGain(); g2.gain.value = 0.25; g2.connect(g1);
+      let o2 = ax.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.003; o2.connect(g2); o2.start(t); o2.stop(t + 5);
+      let g3 = ax.createGain(); g3.gain.value = 0.08; g3.connect(g1);
+      let o3 = ax.createOscillator(); o3.type = 'sine'; o3.frequency.value = f * 3.01; o3.connect(g3); o3.start(t); o3.stop(t + 5);
+    }
+
+    function playArpPhrase() {
+      let sc = chimeScales[chordIdx];
+      let n = 2 + ((Math.random() * 2) | 0);
+      let base = (Math.random() * (sc.length - n)) | 0;
+      let t = ax.currentTime;
+      let gap = 0.18 * smoothTempo;
+      for (let i = 0; i < n; i++) {
+        let f = sc[base + i];
+        let gt = ax.createGain(); gt.gain.setValueAtTime(0, t + i * gap);
+        gt.gain.linearRampToValueAtTime(0.12, t + i * gap + 0.03);
+        gt.gain.setTargetAtTime(0, t + i * gap + 0.05, 0.5 + Math.random() * 0.4); gt.connect(aChimeG);
+        let o = ax.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(gt); o.start(t + i * gap); o.stop(t + i * gap + 4);
+        let g2 = ax.createGain(); g2.gain.value = 0.25; g2.connect(gt);
+        let o2 = ax.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.003; o2.connect(g2); o2.start(t + i * gap); o2.stop(t + i * gap + 4);
+      }
+    }
+
+    function playBgArp() {
+      let sc = chimeScales[chordIdx];
+      let f = sc[arpStep % sc.length] * 0.5;
+      let t = ax.currentTime;
+      let gt = ax.createGain(); gt.gain.setValueAtTime(0.06 + Math.random() * 0.03, t);
+      gt.gain.setTargetAtTime(0, t + 0.05, 0.6); gt.connect(aChimeG);
+      let o = ax.createOscillator(); o.type = 'sine'; o.frequency.value = f; o.connect(gt); o.start(t); o.stop(t + 3);
+      arpStep++;
+    }
+
+    function playCrashSfx() {
+      if (!aInited) return;
+      let len = (ax.sampleRate * 0.3) | 0;
+      let nb = ax.createBuffer(1, len, ax.sampleRate);
+      let nd = nb.getChannelData(0);
+      for (let i = 0; i < len; i++) nd[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ax.sampleRate * 0.08));
+      let bs = ax.createBufferSource(); bs.buffer = nb;
+      let cf = ax.createBiquadFilter(); cf.type = 'lowpass'; cf.frequency.value = 800;
+      let cg = ax.createGain(); cg.gain.value = 1.0;
+      bs.connect(cf); cf.connect(cg); cg.connect(aM); bs.start();
+    }
+
+    function updateAudio(dt) {
+      let spd = Math.max(0, Math.min(1, (speed - 14) / 36));
+      // Tempo: slopeVal<0 = downhill = faster, >0 = uphill = slower
+      let targetTempo = Math.max(0.35, Math.min(1.5, 1 + slopeVal * 0.35));
+      smoothTempo = lerp(smoothTempo, targetTempo, Math.min(1, dt * 2));
+      // Wind
+      aWindG.gain.value = 0.04 + spd * 0.06;
+      aWindF.frequency.value = 250 + spd * 600;
+      // Runner hiss
+      aRunG.gain.value = spd * 0.04;
+      aRunF.frequency.value = 1500 + spd * 2500;
+      // Carve
+      let ta = Math.abs(turnRate);
+      let turnDelta = ta - prevTurnAbs;
+      if (turnDelta > 0.005 && ta > 0.15) carveBurst = Math.min(1, carveBurst + turnDelta * 8);
+      carveBurst *= Math.max(0, 1 - dt * 2.5);
+      let steady = Math.min(1, ta * 1.2) * Math.max(0.3, spd) * 0.03;
+      carveVol = carveBurst * 0.1 + steady;
+      aCarvG.gain.value = carveVol;
+      aCarvF.frequency.value = 400 + ta * 350 + carveBurst * 200;
+      aCarvF.Q.value = 0.5 + carveBurst * 1.0;
+      prevTurnAbs = ta;
+      // Chord progression (tempo-scaled)
+      chordTimer -= dt / smoothTempo;
+      if (chordTimer <= 0) {
+        chordIdx = (chordIdx + 1) % 4;
+        let t = ax.currentTime;
+        for (let i = 0; i < 4; i++) padOscs[i].frequency.setTargetAtTime(chords[chordIdx][i], t, 1.5);
+        chordTimer = 6 + Math.random() * 3;
+      }
+      // Chimes (tempo-scaled)
+      if (state == 1) {
+        chimeTimer -= dt / smoothTempo;
+        if (chimeTimer <= 0) {
+          if (Math.random() < 0.3) { playArpPhrase(); chimeTimer = 4 + Math.random() * 5; }
+          else { playChime(); chimeTimer = 2 + Math.random() * 4; }
+        }
+        arpTimer -= dt / smoothTempo;
+        if (arpTimer <= 0) { playBgArp(); arpTimer = 0.8 + Math.random() * 0.4; }
+      }
+      // Master fade on crash
+      if (state == 2) aM.gain.value = Math.max(0.15, aM.gain.value - dt * 0.5);
+      else aM.gain.value = Math.min(0.6, aM.gain.value + dt * 0.3);
+    }
+
     function startOrRetry() {
+      initAudio();
       if (state == 0) { state = 1; resetGame() }
       else if (state == 2 && crashTimer <= 0) { state = 0 }
     }
@@ -971,6 +1230,8 @@
       if (state == 1) update(dt);
       if (state == 2) { crashTimer -= dt; shakeX *= 0.9; shakeY *= 0.9 }
 
+      if (aInited) updateAudio(dt);
+      updateDay();
       render();
       drawHUD();
       if (state == 0) drawTitle();
