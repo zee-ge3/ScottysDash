@@ -5,4 +5,4 @@ Raycasting to simulate 3d environment
 Uses perlin noise, weighted z axis to make slopes
 Winner of Best Audio Integration at TartanHacks
 
-game here: https://zee-ge3.github.io/ScottysDash/
+game here: https://dash.georgez.xyz
